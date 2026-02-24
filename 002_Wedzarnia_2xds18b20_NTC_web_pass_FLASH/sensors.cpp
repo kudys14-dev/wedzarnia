@@ -5,6 +5,7 @@
 #include "outputs.h"
 #include <nvs_flash.h>
 #include <nvs.h>
+#include <math.h>           // log()
 
 struct CachedReading {
     double value;
@@ -17,8 +18,12 @@ static unsigned long lastTempRequest = 0;
 static unsigned long lastTempReadPossible = 0;
 static CachedReading cachedChamber1 = {25.0, 0, false, 0};
 static CachedReading cachedChamber2 = {25.0, 0, false, 0};
-static CachedReading cachedMeatNtc = {25.0, 0, false, 0};
+static CachedReading cachedMeatNtc   = {25.0, 0, false, 0};
 static int sensorErrorCount = 0;
+
+// Filtr EMA dla NTC (stan między wywołaniami)
+static float filteredNtcTemp   = 25.0f;
+static bool  ntcFilterInitialized = false;
 
 uint8_t sensorAddresses[2][8];
 bool sensorsIdentified = false;
@@ -26,41 +31,67 @@ int chamberSensor1Index = DEFAULT_CHAMBER_SENSOR_1;
 int chamberSensor2Index = DEFAULT_CHAMBER_SENSOR_2;
 
 // ======================================================
-// [NEW] ODCZYT TEMPERATURY Z NTC 100k (GPIO34)
+// ODCZYT TEMPERATURY Z NTC 100k (GPIO34)
 // ======================================================
 
 double readNtcTemperature() {
-    // Uśrednianie wielu próbek ADC
+    // ────────────────────────────────────────────────
+    // 1. Zbieranie próbek – dużo próbek + małe opóźnienie
+    // ────────────────────────────────────────────────
     long adcSum = 0;
-    for (int i = 0; i < NTC_SAMPLES; i++) {
+    const int effectiveSamples = NTC_SAMPLES;           // zalecane: 64–256
+
+    for (int i = 0; i < effectiveSamples; i++) {
         adcSum += analogRead(PIN_NTC);
-        delayMicroseconds(100);
-    }
-    double adcAvg = (double)adcSum / NTC_SAMPLES;
-
-    // Zabezpieczenie przed dzieleniem przez zero
-    if (adcAvg <= 0 || adcAvg >= NTC_ADC_MAX) {
-        return -999.0;  // Błąd odczytu
+        delayMicroseconds(140);                         // 120–200 µs stabilizuje odczyt
     }
 
-    // Obliczenie rezystancji NTC z dzielnika napięcia
-// ZMIEŃ NA (100kΩ na górze, NTC na dole):
-double resistance = NTC_SERIES_R * (NTC_ADC_MAX - adcAvg) / adcAvg;
+    double adcAvg = (double)adcSum / effectiveSamples;
 
-    // Równanie Steinhart-Hart (uproszczone - współczynnik Beta)
-    double steinhart;
-    steinhart = resistance / NTC_NOMINAL_R;          // (R/Ro)
-    steinhart = log(steinhart);                       // ln(R/Ro)
-    steinhart /= NTC_BETA;                            // 1/B * ln(R/Ro)
-    steinhart += 1.0 / (NTC_NOMINAL_T + 273.15);     // + (1/To)
-    steinhart = 1.0 / steinhart;                      // Odwrotność
-    steinhart -= 273.15;                              // Konwersja na Celsjusz
+    // Ochrona przed absurdalnymi wartościami
+    if (adcAvg < 20 || adcAvg > NTC_ADC_MAX - 20) {
+        return -999.0;
+    }
 
-    return steinhart;
+    // ────────────────────────────────────────────────
+    // 2. Obliczenie rezystancji – konfiguracja: 3.3V → Rserie → ADC → NTC → GND
+    // ────────────────────────────────────────────────
+    double resistance = NTC_SERIES_R * adcAvg / (NTC_ADC_MAX - adcAvg + 1e-6);  // +epsilon chroni /0
+
+    // ────────────────────────────────────────────────
+    // 3. Model beta (najczęściej 4060–4130 pasuje lepiej niż 3950)
+    // ────────────────────────────────────────────────
+    double steinhart = resistance / NTC_NOMINAL_R;
+    steinhart = log(steinhart);
+    steinhart /= NTC_BETA;                          // ← tu jest 4100 zamiast 3950
+    steinhart += 1.0 / (NTC_NOMINAL_T + 273.15);
+    steinhart = 1.0 / steinhart;
+    double rawTemp = steinhart - 273.15;
+
+    // ────────────────────────────────────────────────
+    // 4. Filtr EMA – redukuje skoki w wodzie / przy szumie
+    // ────────────────────────────────────────────────
+    const float alpha = 0.91f;                      // 0.88–0.94 – im niższy → mocniejsze wygładzanie
+
+    if (!ntcFilterInitialized) {
+        filteredNtcTemp = (float)rawTemp;
+        ntcFilterInitialized = true;
+    } else {
+        filteredNtcTemp = alpha * filteredNtcTemp + (1.0f - alpha) * (float)rawTemp;
+    }
+
+    // ────────────────────────────────────────────────
+    // 5. Sanity check + ewentualne logowanie
+    // ────────────────────────────────────────────────
+    if (rawTemp < NTC_TEMP_MIN - 20 || rawTemp > NTC_TEMP_MAX + 20) {
+        LOG_FMT(LOG_LEVEL_WARN, "NTC raw temp poza zakresem: %.1f °C (adc=%.0f)", rawTemp, adcAvg);
+    }
+
+    return (double)filteredNtcTemp;
 }
 
 // ======================================================
-// FUNKCJE DO IDENTYFIKACJI CZUJNIKÓW DS18B20 (OBA = KOMORA)
+// FUNKCJE DS18B20 – bez zmian (tylko drobne kosmetyki)
 // ======================================================
 
 void identifyAndAssignSensors() {
@@ -74,10 +105,10 @@ void identifyAndAssignSensors() {
             if (sensors.getAddress(sensorAddresses[i], i)) {
                 char addrStr[24];
                 snprintf(addrStr, sizeof(addrStr), "%02X%02X%02X%02X%02X%02X%02X%02X",
-                        sensorAddresses[i][0], sensorAddresses[i][1],
-                        sensorAddresses[i][2], sensorAddresses[i][3],
-                        sensorAddresses[i][4], sensorAddresses[i][5],
-                        sensorAddresses[i][6], sensorAddresses[i][7]);
+                         sensorAddresses[i][0], sensorAddresses[i][1],
+                         sensorAddresses[i][2], sensorAddresses[i][3],
+                         sensorAddresses[i][4], sensorAddresses[i][5],
+                         sensorAddresses[i][6], sensorAddresses[i][7]);
                 LOG_FMT(LOG_LEVEL_INFO, "DS18B20 Sensor %d: %s (CHAMBER)", i, addrStr);
             }
         }
@@ -93,7 +124,7 @@ void identifyAndAssignSensors() {
     } else if (deviceCount == 1) {
         log_msg(LOG_LEVEL_WARN, "Only 1 DS18B20 found - using single sensor for chamber");
         chamberSensor1Index = 0;
-        chamberSensor2Index = -1;  // Brak drugiego czujnika
+        chamberSensor2Index = -1;
         sensorsIdentified = true;
     } else {
         log_msg(LOG_LEVEL_WARN, "No DS18B20 sensors found!");
@@ -102,7 +133,7 @@ void identifyAndAssignSensors() {
 }
 
 // ======================================================
-// GŁÓWNE FUNKCJE CZUJNIKÓW
+// GŁÓWNE FUNKCJE CZUJNIKÓW – reszta bez dużych zmian
 // ======================================================
 
 void requestTemperature() {
@@ -149,9 +180,7 @@ void readTemperature() {
         }
     }
 
-    // ======================================================
-    // [MOD] Odczyt obu DS18B20 jako temperatura komory
-    // ======================================================
+    // Komora – DS18B20
     double tChamber1 = readTempWithTimeout(chamberSensor1Index);
     bool t1Valid = isValidTemperature(tChamber1);
 
@@ -162,7 +191,6 @@ void readTemperature() {
         t2Valid = isValidTemperature(tChamber2);
     }
 
-    // Oblicz średnią temperaturę komory
     double chamberAvg = 25.0;
     if (t1Valid && t2Valid) {
         chamberAvg = (tChamber1 + tChamber2) / 2.0;
@@ -172,10 +200,9 @@ void readTemperature() {
         chamberAvg = tChamber2;
     }
 
-    // Aktualizacja cache i stanu dla czujników komory
+    // Obsługa błędów i cache komory
     if (!t1Valid && !t2Valid) {
         sensorErrorCount++;
-
         if (sensorErrorCount >= SENSOR_ERROR_THRESHOLD) {
             if (state_lock()) {
                 g_errorSensor = true;
@@ -187,8 +214,7 @@ void readTemperature() {
                 state_unlock();
             }
         }
-
-        // Użyj cache jeśli dostępny
+        // fallback na cache
         if (cachedChamber1.valid || cachedChamber2.valid) {
             if (state_lock()) {
                 if (cachedChamber1.valid && cachedChamber2.valid) {
@@ -230,9 +256,7 @@ void readTemperature() {
         }
     }
 
-    // ======================================================
-    // [MOD] Odczyt NTC 100k jako temperatura mięsa
-    // ======================================================
+    // Mięso – NTC
     double tMeatNtc = readNtcTemperature();
     bool meatValid = (tMeatNtc > NTC_TEMP_MIN && tMeatNtc < NTC_TEMP_MAX);
 
@@ -246,18 +270,16 @@ void readTemperature() {
             g_tMeat = tMeatNtc;
             state_unlock();
         }
-    } else {
-        if (cachedMeatNtc.valid) {
-            if (state_lock()) {
-                g_tMeat = cachedMeatNtc.value;
-                state_unlock();
-            }
-            LOG_FMT(LOG_LEVEL_WARN, "NTC invalid reading (%.1f), using cached: %.1f",
-                     tMeatNtc, cachedMeatNtc.value);
+    } else if (cachedMeatNtc.valid) {
+        if (state_lock()) {
+            g_tMeat = cachedMeatNtc.value;
+            state_unlock();
         }
+        LOG_FMT(LOG_LEVEL_WARN, "NTC invalid reading (%.1f), using cached: %.1f",
+                tMeatNtc, cachedMeatNtc.value);
     }
 
-    // Sprawdzenie przegrzania (na podstawie średniej komory)
+    // Przegrzanie komory
     if (state_lock()) {
         if (g_tChamber > CFG_T_MAX_SOFT) {
             g_errorOverheat = true;
@@ -267,6 +289,10 @@ void readTemperature() {
         state_unlock();
     }
 }
+
+// ────────────────────────────────────────────────
+// Pozostałe funkcje bez zmian
+// ────────────────────────────────────────────────
 
 void checkDoor() {
     bool nowOpen = (digitalRead(PIN_DOOR) == HIGH);
@@ -298,8 +324,8 @@ void checkDoor() {
     }
 
     if (shouldTurnOff) { allOutputsOff(); }
-    if (shouldBeep) { buzzerBeep(2, 100, 100); }
-    if (shouldResume) { initHeaterEnable(); }
+    if (shouldBeep)    { buzzerBeep(2, 100, 100); }
+    if (shouldResume)  { initHeaterEnable(); }
 }
 
 unsigned long getSensorCacheAge() {
@@ -356,22 +382,7 @@ bool autoDetectAndAssignSensors() {
     return sensorsIdentified;
 }
 
-// ======================================================
-// FUNKCJE DOSTĘPOWE DLA WEB SERVERA
-// ======================================================
-
-int getChamberSensor1Index() {
-    return chamberSensor1Index;
-}
-
-int getChamberSensor2Index() {
-    return chamberSensor2Index;
-}
-
-int getTotalSensorCount() {
-    return sensors.getDeviceCount();
-}
-
-bool areSensorsIdentified() {
-    return sensorsIdentified;
-}
+int getChamberSensor1Index() { return chamberSensor1Index; }
+int getChamberSensor2Index() { return chamberSensor2Index; }
+int getTotalSensorCount()    { return sensors.getDeviceCount(); }
+bool areSensorsIdentified()  { return sensorsIdentified; }
