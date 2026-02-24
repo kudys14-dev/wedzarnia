@@ -41,15 +41,15 @@
 // ======================================================
 // KONFIGURACJA NTC 100k
 // ======================================================
-constexpr double NTC_NOMINAL_R     = 100000.0;
-constexpr double NTC_NOMINAL_T     = 25.0;
-constexpr double NTC_BETA          = 3950.0;
-constexpr double NTC_SERIES_R      = 100000.0;
-constexpr int    NTC_ADC_MAX       = 4095;
-constexpr double NTC_V_REF         = 3.27;
-constexpr int    NTC_SAMPLES       = 10;
-constexpr double NTC_TEMP_MIN      = -10.0;
-constexpr double NTC_TEMP_MAX      = 200.0;
+constexpr double NTC_NOMINAL_R     = 100000.0;  // Rezystancja nominalna @ 25°C
+constexpr double NTC_NOMINAL_T     = 25.0;       // Temperatura nominalna
+constexpr double NTC_BETA          = 4350.0;     // Współczynnik Beta (typowy dla NTC 100k)
+constexpr double NTC_SERIES_R      = 98100.0;   // Rezystor szeregowy w dzielniku napięcia (100k)
+constexpr int    NTC_ADC_MAX       = 4095;        // Rozdzielczość ADC ESP32 (12-bit)
+constexpr double NTC_V_REF         = 3.27;         // Napięcie referencyjne
+constexpr int    NTC_SAMPLES       = 30;          // Liczba próbek do uśrednienia
+constexpr double NTC_TEMP_MIN      = -10.0;       // Min akceptowalna temperatura
+constexpr double NTC_TEMP_MAX      = 200.0;       // Max akceptowalna temperatura
 
 // ======================================================
 // 2. KONFIGURACJA GLOBALNA
