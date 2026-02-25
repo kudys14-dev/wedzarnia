@@ -555,8 +555,13 @@ bool flash_file_write(const char* path, const uint8_t* data, uint32_t size) {
         return false;
     }
 
+    LOG_FMT(LOG_LEVEL_WARN,
+        "flash_file_write: sect=%u count=%u path='%s'",
+        startSector, sectorsNeeded, path);
+
     // Kasuj sektory docelowe
     if (!spi_take()) {
+        log_msg(LOG_LEVEL_ERROR, "flash_file_write: SPI MUTEX TIMEOUT – taskUI trzyma mutex zbyt długo!");
         if (oldIdx >= 0) fatTable[oldIdx].valid = 0x01;
         return false;
     }
@@ -569,9 +574,8 @@ bool flash_file_write(const char* path, const uint8_t* data, uint32_t size) {
         uint8_t diagBuf[4] = {0};
         uint32_t diagAddr = (uint32_t)startSector * FLASH_SECTOR_SIZE;
         _flash_read_data(diagAddr, diagBuf, 4);
-        LOG_FMT(LOG_LEVEL_DEBUG,
-            "flash_file_write DIAG after erase sect=%u addr=0x%05lX: "
-            "%02X %02X %02X %02X (should be FF FF FF FF)",
+        LOG_FMT(LOG_LEVEL_WARN,
+            "DIAG erase sect=%u addr=0x%05lX: %02X %02X %02X %02X (need FF FF FF FF)",
             startSector, diagAddr,
             diagBuf[0], diagBuf[1], diagBuf[2], diagBuf[3]);
         if (diagBuf[0] != 0xFF || diagBuf[1] != 0xFF) {
@@ -581,8 +585,8 @@ bool flash_file_write(const char* path, const uint8_t* data, uint32_t size) {
                 _flash_erase_sector(startSector + k);
             }
             _flash_read_data(diagAddr, diagBuf, 4);
-            LOG_FMT(LOG_LEVEL_DEBUG,
-                "flash_file_write DIAG after retry erase: %02X %02X %02X %02X",
+            LOG_FMT(LOG_LEVEL_WARN,
+                "DIAG after retry erase: %02X %02X %02X %02X",
                 diagBuf[0], diagBuf[1], diagBuf[2], diagBuf[3]);
             if (diagBuf[0] != 0xFF) {
                 if (oldIdx >= 0) fatTable[oldIdx].valid = 0x01;
