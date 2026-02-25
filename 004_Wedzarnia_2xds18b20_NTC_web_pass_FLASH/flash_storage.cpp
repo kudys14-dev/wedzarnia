@@ -106,12 +106,15 @@ static inline void flash_cs_high() {
 // ======================================================
 
 static void _flash_write_enable() {
+    flash_wait_busy();  // WREN ignorowany gdy BUSY=1 – czekaj aż chip będzie idle
     SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_WRITE_ENABLE);
     flash_cs_high();
     SPI.endTransaction();
-    delayMicroseconds(2);
+    delayMicroseconds(10);  // tSHSL2: czas po WREN przed następną komendą
+    // Weryfikacja – po WREN, WEL musi być 1
+    // (nie logujemy tu bo jesteśmy bez mutexa, caller sprawdza)
 }
 
 uint8_t flash_read_status() {
@@ -156,6 +159,15 @@ static void _flash_read_data(uint32_t address, uint8_t* buffer, uint32_t size) {
 static void _flash_write_page(uint32_t address, const uint8_t* data, uint16_t size) {
     if (size > FLASH_PAGE_SIZE) size = FLASH_PAGE_SIZE;
     _flash_write_enable();
+
+    // [DIAG] Sprawdź WEL bit po write_enable
+    uint8_t statusBefore = flash_read_status();
+    if (!(statusBefore & 0x02)) {
+        LOG_FMT(LOG_LEVEL_WARN,
+            "_flash_write_page DIAG: WEL=0 po write_enable! status=0x%02X addr=0x%05lX",
+            statusBefore, address);
+    }
+
     SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_PAGE_PROGRAM);
@@ -165,7 +177,15 @@ static void _flash_write_page(uint32_t address, const uint8_t* data, uint16_t si
     for (uint16_t i = 0; i < size; i++) SPI.transfer(data[i]);
     flash_cs_high();
     SPI.endTransaction();
+
     flash_wait_busy();
+
+    // [DIAG] Odczytaj status po zakończeniu Page Program
+    uint8_t statusAfter = flash_read_status();
+    LOG_FMT(LOG_LEVEL_WARN,
+        "_flash_write_page DIAG: addr=0x%05lX size=%u status_after=0x%02X (WEL=%d BUSY=%d)",
+        address, size, statusAfter,
+        (statusAfter >> 1) & 1, statusAfter & 1);
 }
 
 // Wewnętrzna wersja erase_sector – bez mutexa
@@ -476,6 +496,50 @@ bool flash_init(SemaphoreHandle_t spiMutex) {
     SPI.endTransaction();
     spi_give();
     delay(3);  // tRES1 = 3μs min, dajemy 3ms dla pewności
+
+    // Poczekaj aż chip wyjdzie ze stanu BUSY (może być busy po poprzednim resecie)
+    {
+        if (!spi_take()) return false;
+        unsigned long t = millis();
+        while ((flash_read_status() & 0x01) && millis() - t < 5000) delay(10);
+        uint8_t s = flash_read_status();
+        if (s & 0x01) log_msg(LOG_LEVEL_ERROR, "Flash: BUSY timeout po power-up!");
+        else LOG_FMT(LOG_LEVEL_INFO, "Flash: idle po power-up, SR1=0x%02X", s);
+        spi_give();
+    }
+
+    // Odczytaj status rejestr i odblokuj zapis jeśli BP bity są ustawione
+    // lub WP jest aktywny przez rejestr statusu
+    {
+        if (!spi_take()) return false;
+        uint8_t sr1 = flash_read_status();
+        LOG_FMT(LOG_LEVEL_WARN, "Flash SR1 po power-up: 0x%02X (BUSY=%d WEL=%d BP=%d SRP=%d)",
+            sr1, sr1&1, (sr1>>1)&1, (sr1>>2)&7, (sr1>>7)&1);
+
+        // Jeśli SR1 Protection Register (SRP0=bit7) = 0 i BP bits != 0,
+        // odblokuj przez Write Status Register
+        if ((sr1 & 0x7C) != 0) {  // bity BP0-BP2-TB-BP3 (bity 2-6)
+            log_msg(LOG_LEVEL_WARN, "Flash: BP bits ustawione – odblokowanie zapisu...");
+            // Write Enable dla Status Register
+            SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
+            flash_cs_low();
+            SPI.transfer(0x50);  // WRSR enable (Write Enable for Volatile Status Register)
+            flash_cs_high();
+            SPI.endTransaction();
+            delayMicroseconds(5);
+            // Zapisz SR1=0x00 (brak ochrony)
+            SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
+            flash_cs_low();
+            SPI.transfer(0x01);  // Write Status Register
+            SPI.transfer(0x00);  // SR1 = 0 (wszystkie bity ochrony skasowane)
+            flash_cs_high();
+            SPI.endTransaction();
+            delay(15);  // tW = 15ms max
+            uint8_t sr1new = flash_read_status();
+            LOG_FMT(LOG_LEVEL_WARN, "Flash SR1 po odblok: 0x%02X", sr1new);
+        }
+        spi_give();
+    }
 
     uint16_t id  = flash_get_jedec_id();  // ma własny mutex
     uint8_t  mfr = id >> 8;
