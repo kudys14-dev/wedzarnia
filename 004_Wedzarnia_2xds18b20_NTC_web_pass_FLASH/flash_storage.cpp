@@ -275,16 +275,9 @@ static void _flash_write_data_locked(uint32_t address, const uint8_t* data, uint
         _flash_write_page(address, data + offset, bytesToWrite);
         address += bytesToWrite;
         offset  += bytesToWrite;
-
-        // [FIX-3] Reset WDT co stronę (256B write = ~3ms, nie blokuje WDT)
-        // Mutex zwalniamy i bierzemy z powrotem żeby inne taski mogły odetchnąć
-        spi_give();
-        vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
-        taskYIELD();
-        if (!spi_take()) {
-            log_msg(LOG_LEVEL_ERROR, "_flash_write_data: mutex lost mid-write!");
-            return;
-        }
+        // Nie oddajemy mutexa w środku zapisu – to powodowało corrupcję.
+        // Dla pliku 40B: 1 strona, czas <3ms – TFT poczeka.
+        // Dla pliku 4KB: 16 stron, max ~50ms – akceptowalne.
     }
 }
 
@@ -314,9 +307,7 @@ static void fat_compact() {
 static void fat_write_to_sector(uint32_t sector) {
     // Kasuj sektor
     if (!spi_take()) { log_msg(LOG_LEVEL_ERROR, "fat_write: mutex timeout (erase)"); return; }
-    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     _flash_erase_sector(sector);
-    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
 
     uint32_t addr = sector * FLASH_SECTOR_SIZE;
 
@@ -569,10 +560,37 @@ bool flash_file_write(const char* path, const uint8_t* data, uint32_t size) {
         if (oldIdx >= 0) fatTable[oldIdx].valid = 0x01;
         return false;
     }
-    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     for (uint16_t k = 0; k < sectorsNeeded; k++) {
         _flash_erase_sector(startSector + k);
-        vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
+    }
+
+    // [DIAG] Sprawdź czy erase zadziałał – pierwsze 4 bajty muszą być 0xFF
+    {
+        uint8_t diagBuf[4] = {0};
+        uint32_t diagAddr = (uint32_t)startSector * FLASH_SECTOR_SIZE;
+        _flash_read_data(diagAddr, diagBuf, 4);
+        LOG_FMT(LOG_LEVEL_DEBUG,
+            "flash_file_write DIAG after erase sect=%u addr=0x%05lX: "
+            "%02X %02X %02X %02X (should be FF FF FF FF)",
+            startSector, diagAddr,
+            diagBuf[0], diagBuf[1], diagBuf[2], diagBuf[3]);
+        if (diagBuf[0] != 0xFF || diagBuf[1] != 0xFF) {
+            // Sektor nie został skasowany! Spróbuj ponownie.
+            log_msg(LOG_LEVEL_WARN, "flash_file_write: erase verify FAILED – retrying erase");
+            for (uint16_t k = 0; k < sectorsNeeded; k++) {
+                _flash_erase_sector(startSector + k);
+            }
+            _flash_read_data(diagAddr, diagBuf, 4);
+            LOG_FMT(LOG_LEVEL_DEBUG,
+                "flash_file_write DIAG after retry erase: %02X %02X %02X %02X",
+                diagBuf[0], diagBuf[1], diagBuf[2], diagBuf[3]);
+            if (diagBuf[0] != 0xFF) {
+                if (oldIdx >= 0) fatTable[oldIdx].valid = 0x01;
+                log_msg(LOG_LEVEL_ERROR, "flash_file_write: sector erase FAILED after retry!");
+                spi_give();
+                return false;
+            }
+        }
     }
 
     // Zapisz dane (zwalnia i bierze mutex co stronę)
