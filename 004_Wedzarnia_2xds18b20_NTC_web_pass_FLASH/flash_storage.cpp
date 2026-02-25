@@ -31,7 +31,7 @@
 #include "flash_storage.h"
 #include "config.h"
 #include <SPI.h>
-#include <esp_task_wdt.h>
+#include <freertos/task.h>  // vTaskDelay – bezpieczne yield z każdego taska
 
 // ======================================================
 // KOMENDY SPI W25Q128
@@ -51,6 +51,18 @@
 
 // Timeout mutexa SPI – 2 sekundy (TFT może rysować dużo)
 #define SPI_MUTEX_TIMEOUT_MS    2000
+
+// ======================================================
+// USTAWIENIA SPI DLA W25Q128
+// [FIX-10] Bez beginTransaction/endTransaction ESP32 używa
+//          częstotliwości ustawionej przez ostatnią operację
+//          (np. TFT Adafruit_ST7735 ustawia własne clock/mode).
+//          W25Q128 Page Program wymaga stabilnego MODE0 i <=20 MHz.
+//          20 MHz = bezpieczna wartość dla klonów (GD25Q128, XM25Q128).
+//          Odczyt może działać na 40 MHz, ale zapis musi być wolniejszy.
+// ======================================================
+static const SPISettings FLASH_SPI_WRITE_SETTINGS(20000000UL, MSBFIRST, SPI_MODE0);
+static const SPISettings FLASH_SPI_READ_SETTINGS( 40000000UL, MSBFIRST, SPI_MODE0);
 
 // ======================================================
 // ZMIENNE STATYCZNE
@@ -94,18 +106,22 @@ static inline void flash_cs_high() {
 // ======================================================
 
 static void _flash_write_enable() {
+    SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_WRITE_ENABLE);
     flash_cs_high();
+    SPI.endTransaction();
     delayMicroseconds(2);
 }
 
 uint8_t flash_read_status() {
     // Ta funkcja może być wołana z flash_wait_busy() która już trzyma mutex
+    SPI.beginTransaction(FLASH_SPI_READ_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_READ_STATUS1);
     uint8_t s = SPI.transfer(0x00);
     flash_cs_high();
+    SPI.endTransaction();
     return s;
 }
 
@@ -125,6 +141,7 @@ void flash_wait_busy() {
 // Wewnętrzna wersja read_data – bez pobierania mutexa
 static void _flash_read_data(uint32_t address, uint8_t* buffer, uint32_t size) {
     flash_wait_busy();
+    SPI.beginTransaction(FLASH_SPI_READ_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_READ_DATA);
     SPI.transfer((address >> 16) & 0xFF);
@@ -132,12 +149,14 @@ static void _flash_read_data(uint32_t address, uint8_t* buffer, uint32_t size) {
     SPI.transfer( address        & 0xFF);
     for (uint32_t i = 0; i < size; i++) buffer[i] = SPI.transfer(0x00);
     flash_cs_high();
+    SPI.endTransaction();
 }
 
 // Wewnętrzna wersja write_page – bez pobierania mutexa
 static void _flash_write_page(uint32_t address, const uint8_t* data, uint16_t size) {
     if (size > FLASH_PAGE_SIZE) size = FLASH_PAGE_SIZE;
     _flash_write_enable();
+    SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_PAGE_PROGRAM);
     SPI.transfer((address >> 16) & 0xFF);
@@ -145,6 +164,7 @@ static void _flash_write_page(uint32_t address, const uint8_t* data, uint16_t si
     SPI.transfer( address        & 0xFF);
     for (uint16_t i = 0; i < size; i++) SPI.transfer(data[i]);
     flash_cs_high();
+    SPI.endTransaction();
     flash_wait_busy();
 }
 
@@ -152,12 +172,14 @@ static void _flash_write_page(uint32_t address, const uint8_t* data, uint16_t si
 static void _flash_erase_sector(uint32_t sectorNumber) {
     uint32_t address = sectorNumber * FLASH_SECTOR_SIZE;
     _flash_write_enable();
+    SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_SECTOR_ERASE);
     SPI.transfer((address >> 16) & 0xFF);
     SPI.transfer((address >>  8) & 0xFF);
     SPI.transfer( address        & 0xFF);
     flash_cs_high();
+    SPI.endTransaction();
     flash_wait_busy();
 }
 
@@ -179,9 +201,9 @@ void flash_write_page(uint32_t address, const uint8_t* data, uint16_t size) {
 
 void flash_erase_sector(uint32_t sectorNumber) {
     if (!spi_take()) { log_msg(LOG_LEVEL_ERROR, "flash_erase_sector: mutex timeout"); return; }
-    esp_task_wdt_reset();  // [FIX-3] erase trwa 20-50ms
+    vTaskDelay(1); // yield do schedulera podczas długich operacji flash
     _flash_erase_sector(sectorNumber);
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     spi_give();
 }
 
@@ -189,29 +211,33 @@ void flash_erase_block_64k(uint32_t blockNumber) {
     if (!spi_take()) { log_msg(LOG_LEVEL_ERROR, "flash_erase_block: mutex timeout"); return; }
     uint32_t address = blockNumber * 65536UL;
     _flash_write_enable();
+    SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_BLOCK_ERASE_64);
     SPI.transfer((address >> 16) & 0xFF);
     SPI.transfer((address >>  8) & 0xFF);
     SPI.transfer( address        & 0xFF);
     flash_cs_high();
-    esp_task_wdt_reset();
+    SPI.endTransaction();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     flash_wait_busy();
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     spi_give();
 }
 
 void flash_chip_erase() {
     if (!spi_take()) { log_msg(LOG_LEVEL_ERROR, "flash_chip_erase: mutex timeout"); return; }
     _flash_write_enable();
+    SPI.beginTransaction(FLASH_SPI_WRITE_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_CHIP_ERASE);
     flash_cs_high();
+    SPI.endTransaction();
     // Chip erase: do 200 sekund – oddajemy mutex w pętli
     spi_give();
     unsigned long start = millis();
     while (millis() - start < 300000UL) {
-        esp_task_wdt_reset();
+        vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
         delay(500);
         if (!spi_take()) break;
         bool busy = (flash_read_status() & W25Q_STATUS_BUSY);
@@ -222,12 +248,14 @@ void flash_chip_erase() {
 
 uint16_t flash_get_jedec_id() {
     if (!spi_take()) return 0x0000;
+    SPI.beginTransaction(FLASH_SPI_READ_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_JEDEC_ID);
     uint8_t mfr  = SPI.transfer(0x00);
     uint8_t type = SPI.transfer(0x00);
     SPI.transfer(0x00);
     flash_cs_high();
+    SPI.endTransaction();
     spi_give();
     return ((uint16_t)mfr << 8) | type;
 }
@@ -251,7 +279,7 @@ static void _flash_write_data_locked(uint32_t address, const uint8_t* data, uint
         // [FIX-3] Reset WDT co stronę (256B write = ~3ms, nie blokuje WDT)
         // Mutex zwalniamy i bierzemy z powrotem żeby inne taski mogły odetchnąć
         spi_give();
-        esp_task_wdt_reset();
+        vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
         taskYIELD();
         if (!spi_take()) {
             log_msg(LOG_LEVEL_ERROR, "_flash_write_data: mutex lost mid-write!");
@@ -286,9 +314,9 @@ static void fat_compact() {
 static void fat_write_to_sector(uint32_t sector) {
     // Kasuj sektor
     if (!spi_take()) { log_msg(LOG_LEVEL_ERROR, "fat_write: mutex timeout (erase)"); return; }
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     _flash_erase_sector(sector);
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
 
     uint32_t addr = sector * FLASH_SECTOR_SIZE;
 
@@ -450,11 +478,13 @@ bool flash_init(SemaphoreHandle_t spiMutex) {
 
     // Power up
     if (!spi_take()) return false;
+    SPI.beginTransaction(FLASH_SPI_READ_SETTINGS);
     flash_cs_low();
     SPI.transfer(W25Q_CMD_POWER_UP);
     flash_cs_high();
+    SPI.endTransaction();
     spi_give();
-    delay(3);
+    delay(3);  // tRES1 = 3μs min, dajemy 3ms dla pewności
 
     uint16_t id  = flash_get_jedec_id();  // ma własny mutex
     uint8_t  mfr = id >> 8;
@@ -483,11 +513,11 @@ bool flash_format() {
 
     // Kasuj oba sektory FAT i zapisz pustą FAT z sygnaturą
     if (!spi_take()) return false;
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     _flash_erase_sector(FAT_SECTOR);
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     _flash_erase_sector(FAT_SHADOW_SECTOR);
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     spi_give();
 
     fat_write_to_sector(FAT_SECTOR);
@@ -539,10 +569,10 @@ bool flash_file_write(const char* path, const uint8_t* data, uint32_t size) {
         if (oldIdx >= 0) fatTable[oldIdx].valid = 0x01;
         return false;
     }
-    esp_task_wdt_reset();
+    vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     for (uint16_t k = 0; k < sectorsNeeded; k++) {
         _flash_erase_sector(startSector + k);
-        esp_task_wdt_reset();
+        vTaskDelay(1);  // yield – nie używamy WDT reset (task może nie być zarejestrowany)
     }
 
     // Zapisz dane (zwalnia i bierze mutex co stronę)
