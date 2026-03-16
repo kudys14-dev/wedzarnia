@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset='utf-8'>
+<title>Kreator Profili</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="page-wrap">
+<div class="page-header"><h2 id="creator-title">📝 Kreator Profili</h2></div>
+<div class="card">
+<h3>Krok <span id="step-counter">1</span></h3>
+<label>Nazwa kroku</label><input type="text" id="stepName" value="Krok 1">
+<label>Temp. komory (°C)</label><input type="number" id="stepTSet" value="60">
+<label>Temp. mięsa (°C)</label><input type="number" id="stepTMeat" value="0">
+<label>Min. czas (minuty)</label><input type="number" id="stepMinTime" value="60">
+<label>Tryb mocy (1–3)</label><input type="number" id="stepPowerMode" value="2" min="1" max="3">
+<label>Moc dymu (0–255)</label><input type="number" id="stepSmoke" value="150" min="0" max="255">
+<label>Tryb wentylatora</label>
+<select id="stepFanMode"><option value="0">OFF</option><option value="1" selected>ON</option><option value="2">CYKL</option></select>
+<label>Czas ON wentylatora (s)</label><input type="number" id="stepFanOn" value="10">
+<label>Czas OFF wentylatora (s)</label><input type="number" id="stepFanOff" value="60">
+<div class="check-row"><input type="checkbox" id="stepUseMeatTemp"><span>Użyj temperatury mięsa</span></div>
+<div class="btn-row"><button id="addStepBtn" class="btn-add" onclick="addStep()">Dodaj krok</button></div>
+</div>
+<div class="card">
+<h3>Zbudowany profil</h3>
+<div id="steps-preview"></div>
+<label>Nazwa pliku</label><input type="text" id="profileFilename" placeholder="np. boczek.prof">
+<div class="btn-row">
+<button class="btn-save" onclick="saveProfile()">💾 Zapisz w Flash</button>
+<button class="btn-pc" onclick="saveProfileToPC()">💻 Zapisz na PC</button>
+<button class="btn-clear" onclick="clearCreator()">🗑️ Wyczyść</button>
+</div>
+</div>
+<a class="back-link" href="/">⬅️ Wróć</a>
+</div>
+<script>
+let newProfileSteps=[],stepCounter=1,editIndex=-1;
+document.addEventListener('DOMContentLoaded',function(){
+const params=new URLSearchParams(window.location.search),profileToEdit=params.get('edit'),source=params.get('source')||'sd';
+if(profileToEdit){
+document.getElementById('creator-title').textContent='📝 Edytor: '+profileToEdit;
+document.getElementById('profileFilename').value=profileToEdit;
+document.getElementById('profileFilename').readOnly=true;
+fetch('/profile/get?name='+profileToEdit+'&source='+source).then(r=>r.json()).then(data=>{newProfileSteps=data;updatePreview();if(data.length>0){stepCounter=data.length+1;document.getElementById('step-counter').textContent=stepCounter}})
+}});
+function addStep(){const e={name:document.getElementById('stepName').value,tSet:document.getElementById('stepTSet').value,tMeat:document.getElementById('stepTMeat').value,minTime:document.getElementById('stepMinTime').value,powerMode:document.getElementById('stepPowerMode').value,smoke:document.getElementById('stepSmoke').value,fanMode:document.getElementById('stepFanMode').value,fanOn:document.getElementById('stepFanOn').value,fanOff:document.getElementById('stepFanOff').value,useMeatTemp:document.getElementById('stepUseMeatTemp').checked?1:0};if(editIndex===-1){newProfileSteps.push(e);stepCounter++}else{newProfileSteps[editIndex]=e;editIndex=-1}updatePreview();document.getElementById('step-counter').textContent=stepCounter;document.getElementById('stepName').value='Krok '+stepCounter;document.getElementById('addStepBtn').textContent='Dodaj krok'}
+function updatePreview(){const e=document.getElementById('steps-preview');e.innerHTML='';newProfileSteps.forEach((t,n)=>{const o=document.createElement('div');o.className='step-preview';o.textContent='Krok '+(n+1)+': '+t.name+' | '+t.tSet+'°C | '+t.minTime+'min';o.onclick=function(){loadStepForEdit(n)};e.appendChild(o)})}
+function loadStepForEdit(e){const t=newProfileSteps[e];document.getElementById('stepName').value=t.name;document.getElementById('stepTSet').value=t.tSet;document.getElementById('stepTMeat').value=t.tMeat;document.getElementById('stepMinTime').value=t.minTime;document.getElementById('stepPowerMode').value=t.powerMode;document.getElementById('stepSmoke').value=t.smoke;document.getElementById('stepFanMode').value=t.fanMode;document.getElementById('stepFanOn').value=t.fanOn;document.getElementById('stepFanOff').value=t.fanOff;document.getElementById('stepUseMeatTemp').checked=1==t.useMeatTemp;editIndex=e;document.getElementById('step-counter').textContent=e+1;document.getElementById('addStepBtn').textContent='Aktualizuj krok';window.scrollTo(0,0)}
+function clearCreator(){if(confirm('Wyczyścić kreator?')){newProfileSteps=[];stepCounter=1;editIndex=-1;document.getElementById('step-counter').textContent='1';document.getElementById('steps-preview').innerHTML='';document.getElementById('profileFilename').value='';document.getElementById('profileFilename').readOnly=false;document.getElementById('creator-title').textContent='📝 Kreator Profili'}}
+function buildProfContent(){let t='# Profil\n';newProfileSteps.forEach(e=>{t+=e.name+';'+e.tSet+';'+e.tMeat+';'+e.minTime+';'+e.powerMode+';'+e.smoke+';'+e.fanMode+';'+e.fanOn+';'+e.fanOff+';'+e.useMeatTemp+'\n'});return t}
+function saveProfile(){const e=document.getElementById('profileFilename').value;if(!e)return alert('Wpisz nazwę pliku!');if(!newProfileSteps.length)return alert('Dodaj przynajmniej jeden krok!');const n=new URLSearchParams;n.append('filename',e);n.append('data',buildProfContent());fetch('/profile/create',{method:'POST',body:n}).then(e=>e.text().then(t=>({ok:e.ok,text:t}))).then(({ok:e,text:t})=>{alert(t);e&&(window.location.href='/')})}
+function saveProfileToPC(){const e=document.getElementById('profileFilename').value;if(!e)return alert('Wpisz nazwę pliku!');if(!newProfileSteps.length)return alert('Dodaj przynajmniej jeden krok!');const t=buildProfContent(),n=new Blob([t],{type:'text/plain;charset=utf-8'}),o=URL.createObjectURL(n),d=document.createElement('a');d.href=o;d.download=e.endsWith('.prof')?e:e+'.prof';document.body.appendChild(d);d.click();document.body.removeChild(d);URL.revokeObjectURL(o)}
+</script>
+</body>
+</html>

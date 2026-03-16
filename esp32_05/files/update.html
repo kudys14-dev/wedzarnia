@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head><meta charset='utf-8'><title>OTA Update</title><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>
+<body><div class="page-wrap">
+<div class="page-header"><h2>📦 Aktualizacja OTA</h2></div>
+<div class="card">
+<p style="margin-bottom:14px">Wybierz plik <strong>.bin</strong> z nowym firmware i kliknij przycisk.<br>Urządzenie uruchomi się ponownie po zakończeniu.</p>
+<form id="upload_form" method="POST" action="/update" enctype="multipart/form-data">
+<input type="file" name="update" id="file" accept=".bin" style="margin-bottom:10px">
+<button type="submit" class="btn btn-primary">🚀 Rozpocznij aktualizację</button>
+</form>
+<div id="bar" style="height:8px;background:rgba(0,0,0,.3);border-radius:4px;overflow:hidden;margin-top:14px;display:none"><div id="fill" style="height:100%;width:0;background:#4caf50;border-radius:4px;transition:width .3s"></div></div>
+<div id="pr" style="text-align:center;margin-top:6px;font-size:.9em;color:#aaa"></div>
+<div id="status" style="margin-top:10px;text-align:center"></div>
+</div>
+<a class="back-link" href="/">⬅️ Wróć</a>
+</div>
+<script>
+var form=document.getElementById('upload_form');
+form.addEventListener('submit',function(e){e.preventDefault();var file=document.getElementById('file').files[0];if(!file){document.getElementById('status').innerHTML='Nie wybrano pliku!';return}var xhr=new XMLHttpRequest();xhr.open('POST','/update');xhr.upload.addEventListener('progress',function(e){if(e.lengthComputable){var p=Math.round(e.loaded/e.total*100);document.getElementById('bar').style.display='block';document.getElementById('fill').style.width=p+'%';document.getElementById('pr').textContent=p+'%'}});xhr.onloadend=function(){if(document.getElementById('fill').style.width==='100%')document.getElementById('status').innerHTML='<span style="color:#4caf50">✅ OK!</span> Restart...';else if(xhr.status!==200)document.getElementById('status').innerHTML='<span style="color:#f44336">❌ Błąd</span>';setTimeout(()=>window.location.href='/',5000)};var fd=new FormData();fd.append('update',file,'firmware.bin');document.getElementById('status').textContent='⏳ Wysyłanie...';xhr.send(fd)});
+</script>
+</body></html>

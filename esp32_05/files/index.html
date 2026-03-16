@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset='utf-8'>
+<title>Wędzarnia</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<style>
+.temp-display{display:flex;justify-content:space-around;flex-wrap:wrap;gap:15px;margin-bottom:15px}
+.temp-box{flex:1;min-width:120px;background:rgba(0,0,0,0.3);padding:15px;border-radius:12px;text-align:center;border:2px solid transparent;transition:all 0.3s}
+.temp-box:hover{transform:translateY(-3px);border-color:rgba(255,255,255,0.3)}
+.temp-box .label{font-size:0.9em;opacity:0.8;margin-bottom:8px}
+.temp-box .value{font-size:2.2em;font-weight:bold;font-family:'Courier New',monospace}
+.temp-chamber{border-color:#ff9800}.temp-chamber .value{color:#ff9800}
+.temp-meat{border-color:#ffc107}.temp-meat .value{color:#ffc107}
+.temp-target{border-color:#00bcd4}.temp-target .value{color:#00bcd4}
+.status-info{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:0.95em;padding:10px;background:rgba(0,0,0,0.2);border-radius:8px}
+.status-badge{display:inline-block;padding:5px 12px;border-radius:20px;font-weight:600;font-size:0.9em}
+.status-idle{background:#666}.status-auto{background:#4caf50}.status-manual{background:#00bcd4}.status-pause{background:#ff9800}.status-error{background:#f44336}
+.timer-card{background:rgba(76,175,80,0.1);border:2px solid #4caf50;padding:15px;border-radius:12px;margin-bottom:15px;display:none}
+.timer-card.active{display:block;animation:fadeIn 0.3s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+.timer-row{display:flex;justify-content:space-around;flex-wrap:wrap;gap:10px;margin-top:10px}
+.timer-item{text-align:center}
+.timer-item .label{font-size:0.85em;opacity:0.8;margin-bottom:5px}
+.timer-item .time{font-size:1.8em;font-weight:bold;font-family:'Courier New',monospace}
+.time-elapsed{color:#4caf50}.time-remaining{color:#ff9800}
+.header{background:linear-gradient(135deg,#d32f2f 0%,#c62828 100%);padding:20px;border-radius:15px;margin-bottom:20px;box-shadow:0 8px 20px rgba(211,47,47,0.3);text-align:center}
+.header h1{font-size:2em;margin:0;text-shadow:2px 2px 4px rgba(0,0,0,0.5)}
+.header .version{font-size:0.8em;opacity:0.9;margin-top:5px}
+.status-card{background:rgba(255,255,255,0.05);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.1);padding:20px;border-radius:15px;margin-bottom:15px;box-shadow:0 8px 32px rgba(0,0,0,0.3)}
+.section{background:rgba(255,255,255,0.05);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.1);padding:20px;border-radius:12px;margin-bottom:15px;box-shadow:0 4px 16px rgba(0,0,0,0.2)}
+.section h3{color:#fff;margin-bottom:15px;padding-bottom:10px;border-bottom:2px solid rgba(255,255,255,0.2);font-size:1.3em}
+button{padding:12px 20px;margin:5px;border:none;border-radius:8px;font-size:1em;font-weight:600;cursor:pointer;transition:all 0.3s;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+button:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,0.4)}
+.btn-start{background:linear-gradient(135deg,#4caf50,#45a049);color:white}
+.btn-stop{background:linear-gradient(135deg,#f44336,#e53935);color:white}
+.btn-action{background:linear-gradient(135deg,#2196f3,#1976d2);color:white}
+button:disabled{opacity:0.5;cursor:not-allowed;transform:none!important}
+input,select{padding:10px;margin:5px;background:rgba(0,0,0,0.3);color:#fff;border:2px solid rgba(255,255,255,0.2);border-radius:8px;font-size:1em}
+input:focus,select:focus{outline:none;border-color:#2196f3;box-shadow:0 0 10px rgba(33,150,243,0.3)}
+input[type="range"]{width:100%;max-width:200px}
+input[type="number"]{width:80px}
+.control-group{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:10px 0;padding:12px;background:rgba(0,0,0,0.2);border-radius:8px}
+.control-group label{font-weight:600;margin-right:10px}
+.profile-info{margin-top:10px;padding:10px;background:rgba(33,150,243,0.1);border-left:4px solid #2196f3;border-radius:4px;font-size:0.9em}
+.footer{margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.1)}
+.footer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.footer-link{display:flex;align-items:center;justify-content:center;gap:7px;padding:12px 10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#90caf9;text-decoration:none;font-size:0.9em;font-weight:500;transition:all 0.25s;white-space:nowrap}
+.footer-link:hover{background:rgba(33,150,243,0.15);border-color:rgba(33,150,243,0.4);color:#fff;transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.3)}
+@media(max-width:600px){.header h1{font-size:1.5em}.temp-box{min-width:100px}.temp-box .value{font-size:1.8em}button{padding:10px 15px;font-size:0.9em}.footer-grid{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}}
+</style>
+</head>
+<body>
+<div class="container" style="max-width:800px;margin:0 auto;padding:15px">
+<div class="header">
+<h1 id="fw-title">🔥 Wędzarnia IoT</h1>
+<div class="version" id="fw-ver">wczytywanie...</div>
+</div>
+<div class="status-card">
+<div class="temp-display">
+<div class="temp-box temp-chamber">
+<div class="label">🌡️ Komora (śr.)</div>
+<div class="value" id="temp-chamber">--°C</div>
+<div style="font-size:0.7em;opacity:0.7;margin-top:5px">DS1: <span id="temp-ch1">--</span>°C | DS2: <span id="temp-ch2">--</span>°C</div>
+</div>
+<div class="temp-box temp-meat">
+<div class="label">🍖 Mięso (NTC)</div>
+<div class="value" id="temp-meat">--°C</div>
+</div>
+<div class="temp-box temp-target">
+<div class="label">🎯 Zadana</div>
+<div class="value" id="temp-target">--°C</div>
+</div>
+</div>
+<div class="status-info" id="status-info">
+<div>Status:<span class="status-badge" id="status-badge">Ładowanie...</span></div>
+<div>Moc:<span id="power-mode">-</span></div>
+<div>Wentylator:<span id="fan-mode">-</span></div>
+<div>💨 Dym:<span id="smoke-level">0%</span></div>
+</div>
+</div>
+<div class="timer-card" id="timer-section">
+<div style="text-align:center;margin-bottom:10px"><strong id="step-name">-</strong></div>
+<div class="timer-row">
+<div class="timer-item"><div class="label">🕒 Upłynęło</div><div class="time time-elapsed" id="timer-elapsed">00:00:00</div></div>
+<div class="timer-item" id="countdown-section"><div class="label">⏳ Pozostało</div><div class="time time-remaining" id="timer-remaining">00:00:00</div></div>
+<div class="timer-item" id="process-total-section"><div class="label">⏱️ Do końca</div><div class="time time-remaining" id="process-remaining">--:--:--</div></div>
+</div>
+<div style="text-align:center;margin-top:10px">
+<button class="btn-action" onclick="authAction('/timer/reset','Resetuj czas?')">↻ Resetuj Czas</button>
+<button class="btn-action" id="nextStepBtn" style="display:none" onclick="authAction('/auto/next_step','Pominąć krok?')">⏭️ Następny krok</button>
+</div>
+</div>
+<div class="section">
+<h3>⚡ Sterowanie</h3>
+<div style="text-align:center">
+<button class="btn-action" onclick="authAction('/mode/manual')">🎮 Tryb Manualny</button>
+<button class="btn-start" onclick="authAction('/auto/start')">▶️ Start AUTO</button>
+<button class="btn-stop" onclick="authAction('/auto/stop','Zatrzymać proces?')">⏹️ Stop</button>
+</div>
+<div class="profile-info">Aktywny profil: <strong id="active-profile">Brak</strong></div>
+</div>
+<div class="section">
+<h3>📋 Wybór Profilu</h3>
+<div class="control-group">
+<label>Źródło:</label>
+<select id="profileSource" onchange="sourceChanged()">
+<option value="flash" selected>💾 Pamięć Flash</option>
+<option value="github">☁️ GitHub</option>
+</select>
+</div>
+<div class="control-group"><select id="profileList" style="flex:1"></select></div>
+<div style="text-align:center">
+<button class="btn-action" onclick="selectProfile()">✅ Ustaw aktywny</button>
+<button class="btn-action" onclick="editProfile()">✏️ Edytuj</button>
+<button class="btn-action" id="reloadFlashBtn" onclick="reloadProfiles()">🔄 Odczytaj</button>
+</div>
+</div>
+<div class="section">
+<h3>🎛️ Ustawienia Manualne</h3>
+<div class="control-group">
+<label>Temperatura:</label>
+<input id="tSet" type="number" value="70" min="20" max="130"><span>°C</span>
+<button class="btn-action" onclick="setT()">✅ Ustaw</button>
+</div>
+<div class="control-group">
+<label>Moc grzałek:</label>
+<select id="power"><option value="1">1 grzałka</option><option value="2" selected>2 grzałki</option><option value="3">3 grzałki</option></select>
+<button class="btn-action" onclick="setP()">✅ Ustaw</button>
+</div>
+<div class="control-group">
+<label>Dym PWM:</label>
+<input id="smoke" type="range" min="0" max="255" value="0">
+<span id="smokeVal" style="min-width:50px;font-weight:bold">0</span>
+<button class="btn-action" onclick="setS()">✅ Ustaw</button>
+</div>
+<div class="control-group">
+<label>Termoobieg:</label>
+<select id="fan"><option value="0">OFF</option><option value="1" selected>ON</option><option value="2">CYKL</option></select>
+<span style="margin-left:10px">ON:</span><input id="fon" type="number" value="10" style="width:60px"><span>s</span>
+<span style="margin-left:10px">OFF:</span><input id="foff" type="number" value="60" style="width:60px"><span>s</span>
+<button class="btn-action" onclick="setF()">✅ Ustaw</button>
+</div>
+</div>
+<div class="footer">
+<div class="footer-grid">
+<a class="footer-link" href="/creator">📝 Nowy Profil</a>
+<a class="footer-link" href="/sensors">🔧 Czujniki</a>
+<a class="footer-link" href="/wifi">📶 WiFi</a>
+<a class="footer-link" href="/update">📦 OTA Update</a>
+<a class="footer-link" href="/auth/set">🔑 Zmień hasło</a>
+<a class="footer-link" href="/flash">💾 Pamięć Flash</a>
+<a class="footer-link" href="/sysinfo">ℹ️ System</a>
+</div>
+</div>
+</div>
+<script>
+let currentProfileSource='flash';
+document.getElementById('smoke').oninput=function(){document.getElementById('smokeVal').textContent=this.value};
+function formatTime(s){if(isNaN(s)||s<0)return"--:--:--";const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0')}
+function authAction(url,confirmMsg){if(confirmMsg&&!confirm(confirmMsg))return;fetch(url).then(r=>{if(r.status===401)alert('Wymagane zalogowanie.');fetchStatus()}).catch(e=>console.error(e))}
+function fetchStatus(){
+fetch('/status').then(r=>r.json()).then(data=>{
+document.getElementById('temp-chamber').textContent=data.tChamber.toFixed(1)+'°C';
+document.getElementById('temp-ch1').textContent=data.tChamber1.toFixed(1);
+document.getElementById('temp-ch2').textContent=data.tChamber2.toFixed(1);
+document.getElementById('temp-meat').textContent=data.tMeat.toFixed(1)+'°C';
+document.getElementById('temp-target').textContent=data.tSet.toFixed(1)+'°C';
+let sc='status-idle',st=data.mode;
+if(data.mode.includes('PAUZA')||data.mode.includes('AWARIA'))sc='status-pause';
+else if(data.mode.includes('ERROR'))sc='status-error';
+else if(data.mode==='AUTO')sc='status-auto';
+else if(data.mode==='MANUAL')sc='status-manual';
+const b=document.getElementById('status-badge');b.className='status-badge '+sc;b.textContent=st;
+document.getElementById('power-mode').textContent=data.powerModeText;
+document.getElementById('fan-mode').textContent=data.fanModeText;
+document.getElementById('smoke-level').textContent=Math.round((data.smokePwm/255)*100)+'%';
+const ts=document.getElementById('timer-section');
+if(data.mode==='AUTO'||data.mode==='MANUAL'){
+ts.classList.add('active');
+document.getElementById('timer-elapsed').textContent=formatTime(data.elapsedTimeSec);
+if(data.mode==='AUTO'){
+document.getElementById('step-name').textContent='Krok: '+data.stepName;
+document.getElementById('countdown-section').style.display='block';
+document.getElementById('nextStepBtn').style.display='inline-block';
+document.getElementById('timer-remaining').textContent=formatTime(Math.max(0,data.stepTotalTimeSec-data.elapsedTimeSec));
+const ps=document.getElementById('process-total-section');
+if(data.remainingProcessTimeSec>0){ps.style.display='block';document.getElementById('process-remaining').textContent=formatTime(data.remainingProcessTimeSec)}
+else ps.style.display='none';
+}else{
+document.getElementById('step-name').textContent='Tryb Manualny';
+document.getElementById('countdown-section').style.display='none';
+document.getElementById('nextStepBtn').style.display='none';
+}}else ts.classList.remove('active');
+let pn=data.activeProfile.replace('/profiles/','').replace('github:','[GitHub] ');
+document.getElementById('active-profile').textContent=pn;
+}).catch(e=>console.error('Status fetch error:',e));
+}
+function setT(){authAction('/manual/set?tSet='+document.getElementById('tSet').value)}
+function setP(){authAction('/manual/power?val='+document.getElementById('power').value)}
+function setS(){authAction('/manual/smoke?val='+document.getElementById('smoke').value)}
+function setF(){authAction('/manual/fan?mode='+document.getElementById('fan').value+'&on='+document.getElementById('fon').value+'&off='+document.getElementById('foff').value)}
+function sourceChanged(){currentProfileSource=document.getElementById('profileSource').value;document.getElementById('reloadFlashBtn').style.display=currentProfileSource==='flash'?'inline-block':'none';loadProfiles()}
+function loadProfiles(){
+const url=currentProfileSource==='flash'?'/api/profiles':'/api/github_profiles';
+fetch(url).then(r=>r.json()).then(profiles=>{
+const list=document.getElementById('profileList');list.innerHTML='';
+profiles.forEach(p=>{const name=p.replace('/profiles/','');const opt=document.createElement('option');opt.value=name;opt.textContent=name;list.appendChild(opt)});
+})}
+function selectProfile(){const name=document.getElementById('profileList').value;if(!name)return;const source=currentProfileSource==='flash'?'sd':'github';fetch('/profile/select?name='+name+'&source='+source).then(r=>{if(r.status===401){alert('Wymagane zalogowanie.');return}return r.text()}).then(msg=>{if(msg){alert(msg);fetchStatus()}})}
+function editProfile(){const name=document.getElementById('profileList').value;if(!name)return;const source=currentProfileSource==='flash'?'sd':'github';window.location.href='/creator?edit='+name+'&source='+source}
+function reloadProfiles(){if(currentProfileSource==='flash')fetch('/profile/reload').then(r=>{if(!r.ok)alert('Błąd!');loadProfiles();fetchStatus()})}
+loadProfiles();fetchStatus();setInterval(fetchStatus,1000);
+fetch('/api/sysinfo').then(r=>r.json()).then(d=>{
+const t=document.getElementById('fw-title'),v=document.getElementById('fw-ver');
+function updateHeader(){const time=new Date().toLocaleTimeString('pl-PL');if(t)t.textContent='🔥 '+d.fw_name+'\u00A0'+d.fw_version+'\u00A0\u00A0\u00A0🕒 '+time}
+updateHeader();setInterval(updateHeader,1000);
+if(v)v.textContent='by '+d.fw_author;
+}).catch(()=>{});
+</script>
+</body>
+</html>

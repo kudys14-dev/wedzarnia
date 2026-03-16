@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset='utf-8'>
+<title>Pamięć Flash</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<style>
+.storage-bar{height:10px;background:rgba(0,0,0,.3);border-radius:5px;overflow:hidden;margin:10px 0}
+.storage-fill{height:100%;background:linear-gradient(90deg,#4caf50,#8bc34a);border-radius:5px;transition:width .3s}
+.folder-list{list-style:none;padding:0;margin:0}
+.folder-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(0,0,0,.2);border-radius:8px;margin-bottom:6px;border:1px solid rgba(255,255,255,.08);cursor:pointer;transition:border-color .2s}
+.folder-item:hover{border-color:#2196f3}
+.folder-item .fname{font-family:'Courier New',monospace;font-size:.9em;color:#90caf9;flex:1}
+.folder-item .fsize{font-size:.8em;color:#666;margin:0 10px}
+.folder-item .factions{display:flex;gap:6px}
+.folder-item .factions button{padding:5px 10px;border:none;border-radius:6px;font-size:.8em;cursor:pointer;font-weight:600}
+.btn-view{background:#1976d2;color:#fff}
+.btn-del{background:#c62828;color:#fff}
+.btn-dl{background:#388e3c;color:#fff}
+.breadcrumb{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px;font-size:.9em}
+.breadcrumb span{color:#90caf9;cursor:pointer}
+.breadcrumb span:hover{text-decoration:underline}
+.breadcrumb .sep{color:#555}
+.folder-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.folder-actions{display:flex;gap:6px}
+.folder-actions button{padding:7px 12px;border:none;border-radius:7px;font-size:.82em;cursor:pointer;font-weight:600}
+.btn-refresh{background:#1565c0;color:#fff}
+.btn-del-folder{background:#b71c1c;color:#fff}
+.btn-upload{background:#2e7d32;color:#fff}
+.viewer{background:rgba(0,0,0,.4);padding:15px;border-radius:8px;font-family:'Courier New',monospace;font-size:.85em;color:#e0e0e0;white-space:pre-wrap;max-height:400px;overflow-y:auto;border:1px solid rgba(255,255,255,.1);margin-top:10px;display:none}
+.viewer-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.viewer-header .path{color:#90caf9;font-weight:600;font-size:.9em}
+.tabs{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:15px}
+.tab{padding:8px 14px;border:1px solid rgba(255,255,255,.15);border-radius:8px 8px 0 0;background:rgba(0,0,0,.2);color:#aaa;cursor:pointer;font-weight:600;transition:all .2s;font-size:.9em}
+.tab.active{background:rgba(255,255,255,.08);color:#fff;border-bottom-color:transparent}
+.tab-content{display:none}.tab-content.active{display:block}
+.empty{color:#555;text-align:center;padding:20px;font-size:.9em}
+</style>
+</head>
+<body>
+<div class="page-wrap" style="max-width:700px">
+<div class="page-header"><h2>💾 Menedżer Flash W25Q128</h2></div>
+
+<!-- Status -->
+<div class="card">
+<h3>📊 Status pamięci</h3>
+<div class="row"><span class="lbl">Status</span><span class="val" id="flashStatus">Sprawdzanie...</span></div>
+<div class="row"><span class="lbl">JEDEC ID</span><span class="val" id="flashJedec">-</span></div>
+<div class="row"><span class="lbl">Pojemność</span><span class="val" id="flashSize">-</span></div>
+<div class="row"><span class="lbl">Zajęte / Wolne sektory</span><span class="val" id="flashUsage">-</span></div>
+<div class="storage-bar"><div class="storage-fill" id="flashBar" style="width:0%"></div></div>
+</div>
+
+<!-- Przeglądarka plików -->
+<div class="card">
+<h3>📂 Przeglądarka plików</h3>
+
+<!-- Breadcrumb -->
+<div class="breadcrumb" id="breadcrumb">
+  <span onclick="navigateTo('/')">🏠 /</span>
+</div>
+
+<!-- Nagłówek folderu -->
+<div class="folder-header">
+  <span id="current-path-label" style="font-size:.85em;color:#666">/</span>
+  <div class="folder-actions">
+    <button class="btn-refresh" onclick="refreshCurrent()">🔄 Odśwież</button>
+    <button class="btn-del-folder" id="btn-del-folder" onclick="deleteFolder()" style="display:none">🗑️ Usuń folder</button>
+  </div>
+</div>
+
+<!-- Lista plików/folderów -->
+<ul class="folder-list" id="file-list"><li class="empty">Ładowanie...</li></ul>
+
+<!-- Podgląd pliku -->
+<div id="viewer-wrap" style="display:none">
+  <div class="viewer-header">
+    <span class="path" id="viewer-path"></span>
+    <button onclick="closeViewer()" style="padding:4px 10px;background:#555;color:#fff;border:none;border-radius:4px;cursor:pointer">✖</button>
+  </div>
+  <div class="viewer" id="viewer-content"></div>
+</div>
+</div>
+
+<!-- Upload -->
+<div class="card">
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('text')">📝 Wklej tekst</div>
+  <div class="tab" onclick="switchTab('pc')">💻 Plik z PC</div>
+  <div class="tab" onclick="switchTab('format')">⚠️ Format</div>
+</div>
+
+<div class="tab-content active" id="tab-text">
+  <label>Ścieżka docelowa</label>
+  <input type="text" id="upload-path" placeholder="/profiles/nowy.prof">
+  <label>Zawartość pliku</label>
+  <textarea id="upload-content" rows="6" style="width:100%;padding:11px;background:rgba(0,0,0,.35);color:#eee;border:1px solid rgba(255,255,255,.15);border-radius:9px;font-family:'Courier New',monospace;font-size:.85em;resize:vertical"></textarea>
+  <button class="btn btn-primary" onclick="uploadText()" style="margin-top:10px">📤 Zapisz</button>
+  <div id="upload-msg" style="margin-top:8px;font-size:.9em"></div>
+</div>
+
+<div class="tab-content" id="tab-pc">
+  <label>Ścieżka docelowa na Flash</label>
+  <input type="text" id="pcupload-path" placeholder="/profiles/boczek.prof">
+  <label>Wybierz plik z komputera</label>
+  <input type="file" id="pcupload-file" accept=".prof,.txt,.json,.log,.html,.css,.js" style="width:100%;padding:10px;background:rgba(0,0,0,.35);color:#eee;border:1px solid rgba(255,255,255,.15);border-radius:9px;margin-bottom:10px">
+  <div style="font-size:.8em;color:#666;margin-bottom:10px">Ścieżka uzupełni się automatycznie po wyborze pliku</div>
+  <button class="btn btn-primary" onclick="uploadFromPC()" style="display:block;width:100%;padding:13px;border:none;border-radius:9px;font-size:1em;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#1976d2,#1565c0);color:#fff">💻 Wgraj na Flash</button>
+  <div id="pcupload-msg" style="margin-top:8px;font-size:.9em"></div>
+</div>
+
+<div class="tab-content" id="tab-format">
+  <div class="warn-box">
+    <h3>⚠️ Nieodwracalna operacja!</h3>
+    <p>Formatowanie usuwa WSZYSTKIE pliki z Flash (profile, logi, pliki web).</p>
+  </div>
+  <div style="margin-bottom:10px">
+    <button onclick="clearFolder('/profiles/')" style="width:100%;padding:11px;margin-bottom:8px;border:none;border-radius:9px;background:#e65100;color:#fff;font-size:.95em;font-weight:700;cursor:pointer">🗑️ Wyczyść tylko /profiles/ i /backup/</button>
+    <div style="font-size:.8em;color:#666;text-align:center;margin-bottom:10px">Zachowuje /web/ i /logs/</div>
+  </div>
+  <div class="check-label">
+    <input type="checkbox" id="chkFormat" onchange="document.getElementById('btnFormat').disabled=!this.checked">
+    <span>Rozumiem – chcę sformatować CAŁĄ pamięć</span>
+  </div>
+  <button id="btnFormat" disabled onclick="formatFlash()" class="btn btn-danger" style="margin-top:10px">🗑️ Formatuj całą Flash</button>
+  <div id="format-msg" style="margin-top:10px;font-size:.9em"></div>
+</div>
+</div>
+
+<a class="back-link" href="/">⬅️ Wróć</a>
+</div>
+
+<script>
+// Stan nawigacji
+let currentPath = '/';
+const KNOWN_DIRS = ['/profiles/', '/backup/', '/logs/', '/web/'];
+
+// ── Nawigacja ──────────────────────────────────────────
+function navigateTo(path) {
+  currentPath = path;
+  updateBreadcrumb(path);
+  loadPath(path);
+  document.getElementById('btn-del-folder').style.display =
+    (path !== '/') ? 'inline-block' : 'none';
+  document.getElementById('current-path-label').textContent = path;
+}
+
+function updateBreadcrumb(path) {
+  const bc = document.getElementById('breadcrumb');
+  bc.innerHTML = '<span onclick="navigateTo(\'/\')">🏠 /</span>';
+  if (path !== '/') {
+    const parts = path.split('/').filter(p => p);
+    let built = '/';
+    parts.forEach(p => {
+      built += p + '/';
+      const captured = built;
+      const sep = document.createElement('span');
+      sep.className = 'sep'; sep.textContent = '›';
+      const lnk = document.createElement('span');
+      lnk.textContent = p;
+      lnk.onclick = () => navigateTo(captured);
+      bc.appendChild(sep);
+      bc.appendChild(lnk);
+    });
+  }
+}
+
+function refreshCurrent() { navigateTo(currentPath); }
+
+// ── Ładowanie ──────────────────────────────────────────
+function loadPath(path) {
+  const list = document.getElementById('file-list');
+  list.innerHTML = '<li class="empty">Ładowanie...</li>';
+  closeViewer();
+
+  if (path === '/') {
+    // Pokaż foldery główne
+    list.innerHTML = '';
+    KNOWN_DIRS.forEach(dir => {
+      const li = document.createElement('li');
+      li.className = 'folder-item';
+      li.innerHTML = `
+        <span class="fname">📁 ${dir}</span>
+        <div class="factions">
+          <button class="btn-view" onclick="navigateTo('${dir}');event.stopPropagation()">📂 Otwórz</button>
+          <button class="btn-del" onclick="clearFolder('${dir}');event.stopPropagation()">🗑️ Wyczyść</button>
+        </div>`;
+      list.appendChild(li);
+    });
+    return;
+  }
+
+  fetch('/files/list?dir=' + encodeURIComponent(path), {credentials:'include'})
+    .then(r => r.json())
+    .then(data => {
+      list.innerHTML = '';
+      const files = (data.files || []).filter(f => !f.name.endsWith('.dir'));
+      if (!files.length) {
+        list.innerHTML = '<li class="empty">Folder jest pusty</li>';
+        return;
+      }
+      files.forEach(f => {
+        const name = f.name.split('/').pop();
+        const li = document.createElement('li');
+        li.className = 'folder-item';
+        li.innerHTML = `
+          <span class="fname">📄 ${name}</span>
+          <span class="fsize">${f.name}</span>
+          <div class="factions">
+            <button class="btn-view" onclick="viewFile('${f.name}');event.stopPropagation()">👁️</button>
+            <button class="btn-dl"   onclick="downloadFile('${f.name}');event.stopPropagation()">💾</button>
+            <button class="btn-del"  onclick="deleteFile('${f.name}');event.stopPropagation()">🗑️</button>
+          </div>`;
+        list.appendChild(li);
+      });
+    })
+    .catch(() => { list.innerHTML = '<li class="empty" style="color:#f44336">Błąd ładowania</li>'; });
+}
+
+// ── Operacje na plikach ────────────────────────────────
+function viewFile(path) {
+  fetch('/files/read?path=' + encodeURIComponent(path))
+    .then(r => r.text())
+    .then(t => {
+      document.getElementById('viewer-path').textContent = path;
+      const vc = document.getElementById('viewer-content');
+      vc.textContent = t;
+      vc.style.display = 'block';
+      document.getElementById('viewer-wrap').style.display = 'block';
+      vc.scrollIntoView({behavior:'smooth'});
+    })
+    .catch(() => alert('Błąd odczytu pliku'));
+}
+
+function closeViewer() {
+  document.getElementById('viewer-wrap').style.display = 'none';
+  document.getElementById('viewer-content').style.display = 'none';
+}
+
+function downloadFile(path) {
+  fetch('/files/read?path=' + encodeURIComponent(path))
+    .then(r => r.text())
+    .then(t => {
+      const blob = new Blob([t], {type:'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = path.split('/').pop();
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    }).catch(() => alert('Błąd pobierania'));
+}
+
+function deleteFile(path) {
+  if (!confirm('Usunąć plik ' + path + '?')) return;
+  fetch('/files/delete?path=' + encodeURIComponent(path), {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) refreshCurrent();
+      else alert('Błąd: ' + (d.message || 'Nieznany'));
+    }).catch(() => alert('Błąd połączenia'));
+}
+
+function clearFolder(dir) {
+  if (!confirm('Usunąć wszystkie pliki z ' + dir + '?\n(Podfoldery zostaną zachowane)')) return;
+  fetch('/files/list?dir=' + encodeURIComponent(dir))
+    .then(r => r.json())
+    .then(data => {
+      const files = (data.files || []).filter(f => !f.name.endsWith('.dir'));
+      if (!files.length) { alert('Folder jest już pusty.'); return; }
+      Promise.all(files.map(f =>
+        fetch('/files/delete?path=' + encodeURIComponent(f.name), {method:'POST'})
+      )).then(() => {
+        alert('Usunięto ' + files.length + ' plików z ' + dir);
+        refreshCurrent();
+        loadFlashInfo();
+      });
+    });
+}
+
+function deleteFolder() {
+  if (currentPath === '/') return;
+  clearFolder(currentPath);
+}
+
+// ── Upload ─────────────────────────────────────────────
+function uploadText() {
+  const path = document.getElementById('upload-path').value.trim();
+  const content = document.getElementById('upload-content').value;
+  const msg = document.getElementById('upload-msg');
+  if (!path) { msg.textContent = '❌ Podaj ścieżkę!'; msg.style.color='#f44336'; return; }
+  msg.textContent = '⏳ Zapisywanie...'; msg.style.color = '#aaa';
+  fetch('/files/write', {
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'path='+encodeURIComponent(path)+'&data='+encodeURIComponent(content)
+  }).then(r=>r.json()).then(d=>{
+    msg.textContent = d.ok ? '✅ Zapisano!' : '❌ '+(d.message||'Błąd');
+    msg.style.color = d.ok ? '#4caf50' : '#f44336';
+    if (d.ok) { refreshCurrent(); loadFlashInfo(); }
+  }).catch(()=>{msg.textContent='❌ Błąd połączenia';msg.style.color='#f44336'});
+}
+
+function uploadFromPC() {
+  const path = document.getElementById('pcupload-path').value.trim();
+  const fileInput = document.getElementById('pcupload-file');
+  const msg = document.getElementById('pcupload-msg');
+  if (!path) { msg.textContent='❌ Podaj ścieżkę!'; msg.style.color='#f44336'; return; }
+  if (!fileInput.files || !fileInput.files.length) { msg.textContent='❌ Wybierz plik!'; msg.style.color='#f44336'; return; }
+  const file = fileInput.files[0];
+  if (file.size > 32768) { msg.textContent='❌ Plik za duży (max 32KB)!'; msg.style.color='#f44336'; return; }
+  msg.textContent = '⏳ Wczytywanie...'; msg.style.color = '#aaa';
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    msg.textContent = '⏳ Wysyłanie na Flash...';
+    fetch('/files/write', {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:'path='+encodeURIComponent(path)+'&data='+encodeURIComponent(e.target.result)
+    }).then(r=>r.json()).then(d=>{
+      msg.textContent = d.ok ? '✅ Zapisano: '+path : '❌ '+(d.message||'Błąd');
+      msg.style.color = d.ok ? '#4caf50' : '#f44336';
+      if (d.ok) { refreshCurrent(); loadFlashInfo(); document.getElementById('pcupload-path').value=''; fileInput.value=''; }
+    }).catch(()=>{msg.textContent='❌ Błąd połączenia';msg.style.color='#f44336'});
+  };
+  reader.onerror = ()=>{ msg.textContent='❌ Błąd odczytu pliku'; msg.style.color='#f44336'; };
+  reader.readAsText(file, 'UTF-8');
+}
+
+
+// ── Format ─────────────────────────────────────────────
+function formatFlash() {
+  if (!confirm('OSTATNIA SZANSA!\nSformatować CAŁĄ pamięć Flash?\nWszystkie dane zostaną utracone!')) return;
+  const msg = document.getElementById('format-msg');
+  msg.textContent = '⏳ Formatowanie...'; msg.style.color = '#aaa';
+  document.getElementById('btnFormat').disabled = true;
+  fetch('/flash/format', {method:'POST'}).then(r=>r.json()).then(d=>{
+    msg.textContent = d.ok ? '✅ '+d.message : '❌ '+d.message;
+    msg.style.color = d.ok ? '#4caf50' : '#f44336';
+    if (d.ok) { loadFlashInfo(); navigateTo('/'); }
+    document.getElementById('chkFormat').checked = false;
+  }).catch(()=>{msg.textContent='❌ Błąd połączenia';msg.style.color='#f44336';document.getElementById('btnFormat').disabled=false});
+}
+
+// ── Flash info ─────────────────────────────────────────
+function loadFlashInfo() {
+  fetch('/flash/info', {credentials:'include'}).then(r=>r.json()).then(d=>{
+    document.getElementById('flashStatus').textContent = d.ok ? '✅ OK' : '❌ Błąd';
+    document.getElementById('flashJedec').textContent = d.jedec || '-';
+    document.getElementById('flashSize').textContent = d.size || '-';
+    if (d.ok) {
+      const used = parseInt(d.used) || 0;
+      const free = parseInt(d.free) || 0;
+      const total = used + free;
+      const pct = total > 0 ? Math.round(used/total*100) : 0;
+      document.getElementById('flashUsage').textContent = used + ' zajętych / ' + free + ' wolnych (' + pct + '%)';
+      document.getElementById('flashBar').style.width = pct + '%';
+    }
+  }).catch(()=>{ document.getElementById('flashStatus').textContent = '❌ Błąd połączenia'; });
+}
+
+// ── Zakładki ───────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  const map = {text:0, pc:1, format:2};
+  if (map[name] !== undefined) document.querySelectorAll('.tab')[map[name]].classList.add('active');
+}
+
+// Init – wywołanie bezpośrednie (skrypt jest na końcu body)
+(function init() {
+  const fi = document.getElementById('pcupload-file');
+  if (fi) fi.addEventListener('change', function() {
+    if (this.files && this.files.length) {
+      const fname = this.files[0].name;
+      const pp = document.getElementById('pcupload-path');
+      if (!pp.value) {
+        let dir = '/profiles/';
+        if (fname.endsWith('.html') || fname.endsWith('.css') || fname.endsWith('.js')) dir = '/web/';
+        else if (fname.endsWith('.log')) dir = '/logs/';
+        pp.value = dir + fname;
+      }
+    }
+  });
+  loadFlashInfo();
+  navigateTo('/');
+  setInterval(loadFlashInfo, 30000);
+})();
+</script>
+</body>
+</html>
