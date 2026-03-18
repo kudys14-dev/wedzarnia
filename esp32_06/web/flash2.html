@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang=pl>
+<head>
+<meta charset=utf-8>
+<title>Upload</title>
+<meta name=viewport content=width=device-width,initial-scale=1>
+<link rel=stylesheet href=/style.css>
+<link rel=stylesheet href=/web/flash.css>
+</head>
+<body>
+<div class="fw page-wrap">
+<div class=page-header><h2>Upload/Format</h2></div>
+<div class=card>
+<div class=tabs>
+<div class="tab active" onclick="sT('text')">Tekst</div>
+<div class=tab onclick="sT('pc')">Plik z PC</div>
+<div class=tab onclick="sT('format')">Format</div>
+</div>
+<div class="tab-content active" id=tab-text>
+<label>Sciezka<input type=text id=up placeholder=/profiles/nowy.prof></label>
+<label>Zawartosc<textarea id=uc rows=5 class=ta></textarea></label>
+<button class="btn btn-primary" onclick=uTxt()>Zapisz</button>
+<div id=um class=fmsg></div>
+</div>
+<div class=tab-content id=tab-pc>
+<label>Sciezka<input type=text id=pp placeholder=/web/plik.html></label>
+<label>Plik<input type=file id=pf class=fi></label>
+<button class="btn btn-primary" onclick=uPC()>Wgraj na Flash</button>
+<div id=pm class=fmsg></div>
+</div>
+<div class=tab-content id=tab-format>
+<div class=warn-box><h3>Nieodwracalna!</h3><p>Usuwa WSZYSTKIE pliki z Flash.</p></div>
+<button class=btn-orange onclick="clr('/profiles/')">Wyczysc /profiles/ /backup/</button>
+<div class=check-label><input type=checkbox id=chk onchange="g('btnF').disabled=!this.checked"><span>Rozumiem - formatuj CALA pamiec</span></div>
+<button id=btnF disabled onclick=fmt() class="btn btn-danger">Formatuj Flash</button>
+<div id=fm class=fmsg></div>
+</div>
+</div>
+<a class=back-link href=/flash>Przegladarka</a><a class=back-link href=/>Glowna</a>
+</div><script>function g(id){return document.getElementById(id);}
+function sm(id,t,c){var e=g(id);if(e){e.textContent=t;e.style.color=c;}}
+function sT(n){var a='active';document.querySelectorAll('.tab,.tab-content').forEach(function(t){t.classList.remove(a);});g('tab-'+n).classList.add(a);var m={text:0,pc:1,format:2};if(m[n]!==undefined)document.querySelectorAll('.tab')[m[n]].classList.add(a);}
+function fw(p,d,mid,cb){sm(mid,'...','#aaa');fetch('/files/write',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'path='+encodeURIComponent(p)+'&data='+encodeURIComponent(d)}).then(function(r){return r.json();}).then(function(d){sm(mid,d.ok?'OK':d.message||'!',d.ok?'#4caf50':'#f44336');if(d.ok&&cb)cb();});}
+function uTxt(){var p=g('up').value.trim();if(!p){sm('um','Sciezka!','#f44336');return;}fw(p,g('uc').value,'um');}
+function uPC(){var p=g('pp').value.trim(),fi=g('pf');if(!p||!fi.files||!fi.files.length){sm('pm',!p?'Podaj sciezke!':'Wybierz!','#f44336');return;}if(fi.files[0].size>32768){sm('pm','Za duzy!','#f44336');return;}var r=new FileReader();r.onload=function(e){fw(p,e.target.result,'pm',function(){g('pp').value='';fi.value='';});};r.readAsText(fi.files[0],'UTF-8');}
+function clr(dir){if(!confirm('Usunac z '+dir+'?'))return;fetch('/files/list?dir='+encodeURIComponent(dir)).then(function(r){return r.json();}).then(function(d){var f=(d.files||[]).filter(function(f){return!f.name.endsWith('.dir');});if(!f.length){alert('Pusty.');return;}Promise.all(f.map(function(x){return fetch('/files/delete?path='+encodeURIComponent(x.name),{method:'POST'});})).then(function(){alert('Usunieto '+f.length+'plikow.');});});}
+function fmt(){if(!confirm('Sformatowac CALA pamiec?'))return;g('fm').textContent='Formatowanie';g('fm').style.color='#aaa';g('btnF').disabled=true;fetch('/flash/format',{method:'POST'}).then(function(r){return r.json();}).then(function(d){g('fm').textContent=d.message;g('fm').style.color=d.ok?'#4caf50':'#f44336';g('chk').checked=false;}).catch(function(){g('fm').textContent='Blad';g('fm').style.color='#f44336';g('btnF').disabled=false;});}
+document.addEventListener('DOMContentLoaded',function(){g('pf').addEventListener('change',function(){if(this.files&&this.files.length){var n=this.files[0].name,p=g('pp');if(!p.value){var e=n.split('.').pop().toLowerCase();p.value=(e==='html'||e==='css'||e==='js'?'/web/':e==='log'?'/logs/':'/profiles/')+n;}}});});</script></body></html>

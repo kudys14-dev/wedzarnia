@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset='utf-8'>
+<title>System Info</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<style>
+.live-dot{display:inline-block;width:8px;height:8px;background:#4caf50;border-radius:50%;margin-right:6px;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.mem-bar{height:8px;background:rgba(0,0,0,.3);border-radius:4px;overflow:hidden;margin-top:6px}
+.mem-fill{height:100%;border-radius:4px;transition:width .5s}
+</style>
+</head>
+<body>
+<div class="page-wrap">
+<div class="page-header">
+  <h2>ℹ️ Informacje systemowe</h2>
+  <div style="font-size:.75em;opacity:.7;margin-top:4px" id="updated_at"></div>
+</div>
+
+<div class="card"><h3>Pamięć RAM</h3>
+<div class="row"><span class="lbl">Wolna</span><span class="val info" id="heap">-</span></div>
+<div class="row"><span class="lbl">Minimum</span><span class="val" id="heap_min">-</span></div>
+<div class="row"><span class="lbl">PSRAM</span><span class="val" id="psram">-</span></div>
+<div class="mem-bar"><div class="mem-fill" id="mem_bar" style="width:0"></div></div>
+</div>
+
+<div class="card"><h3>System</h3>
+<div class="row"><span class="lbl">Uptime</span><span class="val info" id="uptime">-</span></div>
+<div class="row"><span class="lbl">CPU</span><span class="val" id="cpu_freq">-</span></div>
+<div class="row"><span class="lbl">Temp. CPU</span><span class="val" id="cpu_temp">-</span></div>
+<div class="row"><span class="lbl">Ostatni reset</span><span class="val" id="reset_reason">-</span></div>
+</div>
+
+<div class="card"><h3>💾 Flash W25Q128</h3>
+<div class="row"><span class="lbl">Status</span><span class="val" id="flash_status">-</span></div>
+<div class="row"><span class="lbl">JEDEC ID</span><span class="val" id="flash_jedec">-</span></div>
+<div class="row"><span class="lbl">Sektory zajęte</span><span class="val" id="flash_used">-</span></div>
+<div class="row"><span class="lbl">Sektory wolne</span><span class="val" id="flash_free">-</span></div>
+</div>
+
+<div class="card"><h3>Czujniki</h3>
+<div class="row"><span class="lbl">DS18B20</span><span class="val" id="sensors">-</span></div>
+<div class="row"><span class="lbl">Zidentyfikowane</span><span class="val" id="sensors_id">-</span></div>
+</div>
+
+<div class="card"><h3>WiFi</h3>
+<div class="row"><span class="lbl">Status</span><span class="val" id="wifi_status">-</span></div>
+<div class="row"><span class="lbl">SSID</span><span class="val" id="wifi_ssid">-</span></div>
+<div class="row"><span class="lbl">IP STA</span><span class="val" id="wifi_ip">-</span></div>
+<div class="row"><span class="lbl">IP AP</span><span class="val" id="ap_ip">-</span></div>
+<div class="row"><span class="lbl">RSSI</span><span class="val" id="wifi_rssi">-</span></div>
+</div>
+
+<div class="card"><h3>Firmware</h3>
+<div class="row"><span class="lbl">Wersja</span><span class="val info" id="fw_version">-</span></div>
+<div class="row"><span class="lbl">Autor</span><span class="val" id="fw_author">-</span></div>
+<div class="row"><span class="lbl">Chip</span><span class="val" id="chip_model">-</span></div>
+<div class="row"><span class="lbl">MAC</span><span class="val" id="mac_addr">-</span></div>
+<div class="row"><span class="lbl">Flash ESP32</span><span class="val" id="flash_size">-</span></div>
+</div>
+
+<a class="back-link" href="/">⬅️ Wróć</a>
+</div>
+
+<script>
+function fmtBytes(b){if(b>=1048576)return(b/1048576).toFixed(1)+' MB';if(b>=1024)return(b/1024).toFixed(0)+' KB';return b+' B'}
+function fmtUptime(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),ss=s%60;return(d>0?d+'d ':'')+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0')}
+function setVal(id,val,cls){const e=document.getElementById(id);if(e){e.textContent=val;if(cls)e.className='val '+cls}}
+
+function loadInfo(){
+  fetch('/api/sysinfo').then(r=>r.json()).then(d=>{
+    setVal('heap', fmtBytes(d.heap_free), 'info');
+    setVal('heap_min', fmtBytes(d.heap_min));
+    setVal('psram', d.psram_total>0 ? fmtBytes(d.psram_total) : 'Brak');
+
+    const pct = d.heap_total>0 ? Math.round((1-d.heap_free/d.heap_total)*100) : 0;
+    const bar = document.getElementById('mem_bar');
+    bar.style.width = pct+'%';
+    bar.style.background = pct>80?'#f44336':pct>60?'#ff9800':'#4caf50';
+
+    document.getElementById('uptime').innerHTML = '<span class="live-dot"></span>'+fmtUptime(d.uptime_sec);
+    document.getElementById('uptime').className = 'val info';
+    setVal('cpu_freq', d.cpu_freq+' MHz');
+    setVal('cpu_temp', d.cpu_temp>0?d.cpu_temp.toFixed(1)+' °C':'N/A',
+      d.cpu_temp>70?'err':d.cpu_temp>55?'warn':'');
+    setVal('reset_reason', d.reset_reason);
+
+    setVal('flash_status', d.flash_ok?'✅ OK (W25Q128)':'❌ Brak', d.flash_ok?'ok':'err');
+    setVal('flash_jedec', d.flash_jedec||'-');
+    setVal('flash_used', (d.flash_used_sectors||0)+' sektorów');
+    setVal('flash_free', (d.flash_free_sectors||0)+' sektorów', d.flash_free_sectors>10?'ok':'warn');
+
+    setVal('sensors', d.sensor_count+' szt.', d.sensor_count>0?'ok':'warn');
+    setVal('sensors_id', d.sensors_identified?'✅ Tak':'⚠️ Nie', d.sensors_identified?'ok':'warn');
+
+    setVal('wifi_status', d.wifi_connected?'✅ Połączono':'❌ Rozłączono', d.wifi_connected?'ok':'err');
+    setVal('wifi_ssid', d.wifi_ssid||'-');
+    setVal('wifi_ip', d.wifi_ip||'-');
+    setVal('ap_ip', d.ap_ip||'-');
+    const rssi = d.wifi_rssi;
+    setVal('wifi_rssi', d.wifi_connected?rssi+' dBm':'-',
+      rssi>-60?'ok':rssi>-75?'warn':'err');
+
+    setVal('fw_version', d.fw_version, 'info');
+    setVal('fw_author', d.fw_author);
+    setVal('chip_model', d.chip_model);
+    setVal('mac_addr', d.mac_addr);
+    setVal('flash_size', fmtBytes(d.flash_size));
+
+    document.getElementById('updated_at').textContent = 'Odświeżono: '+new Date().toLocaleTimeString('pl-PL');
+  }).catch(()=>{
+    document.getElementById('updated_at').textContent = '❌ Błąd pobierania danych';
+  });
+}
+
+loadInfo();
+setInterval(loadInfo, 5000);
+</script>
+</body>
+</html>

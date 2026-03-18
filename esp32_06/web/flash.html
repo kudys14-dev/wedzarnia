@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang=pl>
+<head>
+<meta charset=utf-8>
+<title>Flash</title>
+<meta name=viewport content=width=device-width,initial-scale=1>
+<link rel=stylesheet href=/style.css>
+<link rel=stylesheet href=/web/flash.css>
+<script src=/web/flash.js defer></script>
+</head>
+<body>
+<div class="fw page-wrap">
+<div class=page-header><h2>Menedzer Flash W25Q128</h2></div>
+<div class=card>
+<h3>Status pamieci</h3>
+<div class=row><span class=lbl>Status</span><span class=val id=flashStatus>...</span></div>
+<div class=row><span class=lbl>JEDEC ID</span><span class=val id=flashJedec>-</span></div>
+<div class=row><span class=lbl>Pojemnosc</span><span class=val id=flashSize>-</span></div>
+<div class=row><span class=lbl>Zajete/Wolne</span><span class=val id=flashUsage>-</span></div>
+<div class=storage-bar><div class=storage-fill id=flashBar></div></div>
+</div>
+<div class=card>
+<h3>Przegladarka plikow</h3>
+<div class=breadcrumb id=breadcrumb><span onclick="navigateTo('/')">/ root</span></div>
+<div class=folder-header>
+<span id=current-path-label class=cur-path>/</span>
+<div class=folder-actions>
+<button class=btn-refresh onclick=refreshCurrent()>Odswiez</button>
+<button class=btn-del-folder id=btn-del-folder onclick=deleteFolder() hidden>Usun folder</button>
+</div>
+</div>
+<ul class=folder-list id=file-list><li class=empty>Ladowanie...</li></ul>
+<div id=viewer-wrap hidden>
+<div class=viewer-header><span class=path id=viewer-path></span><button class=btn-close onclick=closeViewer()>X</button></div>
+<div class=viewer id=viewer-content></div>
+</div>
+</div>
+<div class=card>
+<a class="btn btn-primary" style=display:block;text-align:center;text-decoration:none href=/flash2>Upload / Format plikow</a>
+</div>
+<a class=back-link href=/>Wróć do glównej</a>
+</div>
+</body>
+</html>
