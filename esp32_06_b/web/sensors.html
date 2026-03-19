@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head><meta charset='utf-8'><title>Czujniki</title><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>
+<body><div class="page-wrap">
+<div class="page-header"><h2>🔧 Zarządzanie czujnikami</h2></div>
+<div class="card">
+<h3>Status czujników</h3>
+<div class="row"><span class="lbl">DS18B20 (komora)</span><span class="val" id="totalSensors">-</span></div>
+<div class="row"><span class="lbl">DS18B20 #1 (idx)</span><span class="val" id="chamber1Idx">-</span></div>
+<div class="row"><span class="lbl">DS18B20 #2 (idx)</span><span class="val" id="chamber2Idx">-</span></div>
+<div class="row"><span class="lbl">NTC 100k (mięso)</span><span class="val">GPIO 34</span></div>
+<div class="row"><span class="lbl">Zidentyfikowane</span><span class="val" id="identified">-</span></div>
+</div>
+<div class="card">
+<h3>Przypisz ręcznie</h3>
+<label>Indeks DS18B20 #1</label><input type="number" id="chamber1Input" min="0" value="0">
+<label>Indeks DS18B20 #2</label><input type="number" id="chamber2Input" min="0" value="1">
+<div class="btn-row">
+<button class="btn-add" onclick="reassign()">✅ Przypisz</button>
+<button class="btn-save" onclick="autodetect()">🔍 Auto-wykryj</button>
+</div>
+<div id="msg" style="margin-top:10px;font-size:.9em"></div>
+</div>
+<a class="back-link" href="/">⬅️ Wróć</a>
+</div>
+<script>
+function loadInfo(){fetch('/api/sensors').then(r=>r.json()).then(d=>{document.getElementById('totalSensors').textContent=d.total_sensors;document.getElementById('chamber1Idx').textContent=d.chamber1_index;document.getElementById('chamber2Idx').textContent=d.chamber2_index;document.getElementById('identified').textContent=d.identified?'✅ Tak':'❌ Nie'})}
+function reassign(){const c1=document.getElementById('chamber1Input').value,c2=document.getElementById('chamber2Input').value;fetch('/api/sensors/reassign',{method:'POST',body:new URLSearchParams({chamber1:c1,chamber2:c2})}).then(r=>r.json()).then(d=>{document.getElementById('msg').textContent=d.status==='ok'?'✅ Przypisano':'❌ Błąd';loadInfo()})}
+function autodetect(){document.getElementById('msg').textContent='⏳ Wykrywanie...';fetch('/api/sensors/autodetect',{method:'POST'}).then(r=>r.json()).then(d=>{document.getElementById('msg').textContent=d.message||d.error;loadInfo()})}
+loadInfo();
+</script>
+</body></html>

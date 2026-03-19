@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head><meta charset='utf-8'><title>Zmiana hasła</title><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>
+<body><div class="page-wrap">
+<div class="page-header"><h2>🔑 Zmiana danych logowania</h2></div>
+<div class="card">
+<form method="POST" action="/auth/save">
+<label>Nowy login</label><input type="text" name="user" required minlength="1" maxlength="31" autocomplete="username">
+<label>Nowe hasło</label><input type="password" name="pass" required minlength="4" maxlength="63" autocomplete="new-password">
+<label>Powtórz hasło</label><input type="password" name="pass2" required minlength="4" maxlength="63" autocomplete="new-password">
+<button type="submit" class="btn btn-primary" style="margin-top:14px">💾 Zapisz</button>
+</form>
+<p class="note">⚠️ Po zapisaniu przeglądarka poprosi o ponowne zalogowanie.<br>Aby zresetować hasło do domyślnego, przytrzymaj ENTER na ekranie IDLE przez 5 sekund.</p>
+</div>
+<a class="back-link" href="/">⬅️ Wróć</a>
+</div></body></html>
