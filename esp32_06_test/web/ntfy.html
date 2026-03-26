@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Powiadomienia</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="page-wrap">
+<div class="page-header"><h2>🔔 Powiadomienia ntfy</h2></div>
+
+<div class="card" id="howto">
+<h3>Jak skonfigurować</h3>
+<ol style="padding-left:18px;line-height:2em;font-size:.95em;color:#ccc">
+<li>Pobierz apkę <strong style="color:#fff">ntfy</strong> na Android lub iOS</li>
+<li>W apce kliknij <strong style="color:#fff">+</strong> i wpisz topic z poniższego pola</li>
+<li>Włącz powiadomienia poniżej i zapisz</li>
+<li>Kliknij <strong style="color:#fff">Testuj</strong> — sprawdź czy dostałeś powiadomienie</li>
+</ol>
+<div style="margin-top:12px;padding:10px;background:rgba(33,150,243,.1);border-radius:8px;font-size:.85em;color:#90caf9">
+💡 Możesz użyć własnego serwera ntfy (self-hosted) — wpisz jego URL w pole Serwer.
+</div>
+</div>
+
+<div class="card">
+<h3>Ustawienia</h3>
+
+<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08)">
+<span style="font-size:.95em">Powiadomienia włączone</span>
+<label style="position:relative;display:inline-block;width:48px;height:26px;margin:0">
+  <input type="checkbox" id="enabled" style="opacity:0;width:0;height:0;position:absolute">
+  <span id="toggleBg" onclick="toggleSwitch()" style="position:absolute;inset:0;border-radius:26px;background:#444;cursor:pointer;transition:.3s">
+    <span id="toggleKnob" style="position:absolute;left:3px;top:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.3s"></span>
+  </span>
+</label>
+</div>
+
+<label>Topic (nazwa kanału)</label>
+<input type="text" id="topic" placeholder="np. wedzarnia-a1b2c3d4" autocomplete="off" spellcheck="false">
+<div style="font-size:.8em;color:#666;margin-top:4px">Unikalny identyfikator — subskrybuj go w apce ntfy</div>
+
+<label>Serwer</label>
+<input type="text" id="server" placeholder="https://ntfy.sh" autocomplete="off">
+<div style="font-size:.8em;color:#666;margin-top:4px">Zostaw domyślny lub wpisz własny serwer ntfy</div>
+
+<button class="btn btn-primary" onclick="save()" style="margin-top:18px">💾 Zapisz</button>
+<button class="btn" onclick="testNotify()" style="background:linear-gradient(135deg,#f57c00,#e65100);color:#fff;margin-top:8px">🔔 Testuj powiadomienie</button>
+</div>
+
+<div class="card" id="alertsCard">
+<h3>Typy alertów</h3>
+<div style="font-size:.9em;line-height:2em;color:#ccc">
+  <div>🔥 Przegrzanie komory (>zadana+5°C) — <span style="color:#ff5252">PILNY</span></div>
+  <div>🍖 Mięso osiągnęło temperaturę docelową — <span style="color:#ff5252">PILNY</span></div>
+  <div>🚨 Awaria grzałki (brak wzrostu temp.) — <span style="color:#ff5252">PILNY</span></div>
+  <div>⚠️ Błąd czujnika temperatury — <span style="color:#ffa726">WAŻNY</span></div>
+  <div>🚪 Drzwi otwarte >60 sekund — <span style="color:#ffa726">WAŻNY</span></div>
+  <div>▶️ Start / ⏹️ Stop procesu — <span style="color:#66bb6a">INFO</span></div>
+</div>
+</div>
+
+<div id="msg" style="display:none;padding:12px;border-radius:8px;margin-top:10px;text-align:center;font-weight:600"></div>
+
+<a class="back-link" href="/">← Strona główna</a>
+</div>
+
+<script>
+var enabled = false;
+
+function toggleSwitch() {
+  enabled = !enabled;
+  document.getElementById('enabled').checked = enabled;
+  document.getElementById('toggleBg').style.background = enabled ? '#4caf50' : '#444';
+  document.getElementById('toggleKnob').style.left = enabled ? '25px' : '3px';
+}
+
+function showMsg(text, ok) {
+  var el = document.getElementById('msg');
+  el.textContent = text;
+  el.style.display = 'block';
+  el.style.background = ok ? 'rgba(76,175,80,.2)' : 'rgba(244,67,54,.2)';
+  el.style.color = ok ? '#a5d6a7' : '#ef9a9a';
+  el.style.border = '1px solid ' + (ok ? '#4caf50' : '#f44336');
+  setTimeout(function(){ el.style.display='none'; }, 4000);
+}
+
+function save() {
+  var topic  = document.getElementById('topic').value.trim();
+  var server = document.getElementById('server').value.trim() || 'https://ntfy.sh';
+  if (!topic) { showMsg('Wpisz topic!', false); return; }
+  var params = 'enabled=' + (enabled?1:0) + '&topic=' + encodeURIComponent(topic) + '&server=' + encodeURIComponent(server);
+  fetch('/ntfy/save', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:params})
+    .then(function(r){ return r.text(); })
+    .then(function(t){ showMsg(t, true); })
+    .catch(function(){ showMsg('Błąd zapisu!', false); });
+}
+
+function testNotify() {
+  fetch('/ntfy/test', {method:'POST'})
+    .then(function(r){ return r.text(); })
+    .then(function(t){ showMsg(t, t.indexOf('OK')>=0 || t.indexOf('wysłano')>=0); })
+    .catch(function(){ showMsg('Brak połączenia WiFi?', false); });
+}
+
+// Wczytaj aktualne ustawienia
+fetch('/ntfy/config')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    document.getElementById('topic').value  = d.topic  || '';
+    document.getElementById('server').value = d.server || 'https://ntfy.sh';
+    if (d.enabled) toggleSwitch();
+  }).catch(function(){});
+</script>
+</body>
+</html>
