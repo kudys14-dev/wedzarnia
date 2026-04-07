@@ -1,0 +1,573 @@
+// sensors.cpp - [MOD] Oba DS18B20 = komora (średnia), NTC 100k na GPIO34 = mięso
+#include "sensors.h"
+#include "config.h"
+#include "state.h"
+#include "outputs.h"
+#include <nvs_flash.h>
+#include <nvs.h>
+#include <math.h>           // log()
+#include "ntc_lut.h"
+#include "flash_storage.h" 
+
+struct CachedReading {
+    double value;
+    unsigned long timestamp;
+    bool valid;
+    int readAttempts;
+};
+
+static unsigned long lastTempRequest = 0;
+static unsigned long lastTempReadPossible = 0;
+static CachedReading cachedChamber1 = {25.0, 0, false, 0};
+static CachedReading cachedChamber2 = {25.0, 0, false, 0};
+static CachedReading cachedMeatNtc   = {25.0, 0, false, 0};
+static int sensorErrorCount = 0;
+
+// Filtr EMA dla NTC (stan między wywołaniami)
+static float filteredNtcTemp   = 25.0f;
+static bool  ntcFilterInitialized = false;
+
+uint8_t sensorAddresses[2][8];
+bool sensorsIdentified = false;
+int chamberSensor1Index = DEFAULT_CHAMBER_SENSOR_1;
+int chamberSensor2Index = DEFAULT_CHAMBER_SENSOR_2;
+
+// ======================================================
+// ODCZYT TEMPERATURY Z NTC 100k (GPIO34)
+// ======================================================
+
+// Funkcja obliczająca temperaturę z tabeli
+double getTempFromLUT(double currentAdc) {
+    // Zabezpieczenie krańców tabeli
+    if (currentAdc >= ntc_lut[0].adc) return ntc_lut[0].temp;
+    if (currentAdc <= ntc_lut[ntc_lut_size - 1].adc) return ntc_lut[ntc_lut_size - 1].temp;
+
+    for (int i = 0; i < ntc_lut_size - 1; i++) {
+        // Szukamy między którymi punktami jest aktualne ADC
+        if (currentAdc <= ntc_lut[i].adc && currentAdc > ntc_lut[i+1].adc) {
+            // Interpolacja liniowa
+            double adcRange = ntc_lut[i].adc - ntc_lut[i+1].adc;
+            double tempRange = ntc_lut[i+1].temp - ntc_lut[i].temp;
+            double adcOffset = ntc_lut[i].adc - currentAdc;
+            return ntc_lut[i].temp + (adcOffset * tempRange / adcRange);
+        }
+    }
+    return -999.0;
+}
+
+static double getTempFromCalibration(double adc);
+
+double readNtcTemperature() {
+    uint32_t adcSum = 0;
+    for (int i = 0; i < NTC_SAMPLES; i++) {
+        adcSum += analogRead(PIN_NTC);
+        delayMicroseconds(140);
+    }
+
+    double adcAvg = (double)adcSum / NTC_SAMPLES;
+
+    // [FIX] Zapisz ADC do zmiennych globalnych dla telemetrii Supabase
+if (state_lock()) {
+    g_ntcAdc = adcAvg;
+    g_ntcResistance = 0;
+    state_unlock();
+}
+
+    if (adcAvg < 20 || adcAvg > NTC_ADC_MAX - 20) {
+        return -999.0;
+    }
+
+    // OBLICZENIE REZYSTANCJI (zostawiamy do logów)
+//    double resistance = R_PULLUP / ((NTC_ADC_MAX / adcAvg) - 1.0);
+
+    // --- NOWE OBLICZENIE TEMPERATURY Z LUT ---
+    double rawTemp = getTempFromCalibration(adcAvg);
+    // -----------------------------------------
+
+
+
+    // FILTR EMA (bez zmian)
+    if (!ntcFilterInitialized) {
+        filteredNtcTemp = rawTemp;
+        ntcFilterInitialized = true;
+    } else {
+        filteredNtcTemp = NTC_FILTER_ALPHA * filteredNtcTemp + (1.0f - NTC_FILTER_ALPHA) * rawTemp;
+    }
+
+    return filteredNtcTemp + NTC_TEMP_OFFSET;
+}
+
+
+
+// ======================================================
+// FUNKCJE DS18B20 – bez zmian (tylko drobne kosmetyki)
+// ======================================================
+
+void identifyAndAssignSensors() {
+    if (sensorsIdentified) return;
+
+    int deviceCount = sensors.getDeviceCount();
+    LOG_FMT(LOG_LEVEL_INFO, "Identifying %d DS18B20 sensor(s) (both = chamber)...", deviceCount);
+
+    if (deviceCount >= 2) {
+        for (int i = 0; i < deviceCount && i < 2; i++) {
+            if (sensors.getAddress(sensorAddresses[i], i)) {
+                char addrStr[24];
+                snprintf(addrStr, sizeof(addrStr), "%02X%02X%02X%02X%02X%02X%02X%02X",
+                         sensorAddresses[i][0], sensorAddresses[i][1],
+                         sensorAddresses[i][2], sensorAddresses[i][3],
+                         sensorAddresses[i][4], sensorAddresses[i][5],
+                         sensorAddresses[i][6], sensorAddresses[i][7]);
+                LOG_FMT(LOG_LEVEL_INFO, "DS18B20 Sensor %d: %s (CHAMBER)", i, addrStr);
+            }
+        }
+
+        chamberSensor1Index = 0;
+        chamberSensor2Index = 1;
+        sensorsIdentified = true;
+
+        LOG_FMT(LOG_LEVEL_INFO, "Both DS18B20 assigned to CHAMBER (avg)");
+        LOG_FMT(LOG_LEVEL_INFO, "NTC 100k on GPIO%d assigned to MEAT", PIN_NTC);
+
+        buzzerBeep(3, 200, 100);
+    } else if (deviceCount == 1) {
+        log_msg(LOG_LEVEL_WARN, "Only 1 DS18B20 found - using single sensor for chamber");
+        chamberSensor1Index = 0;
+        chamberSensor2Index = -1;
+        sensorsIdentified = true;
+    } else {
+        log_msg(LOG_LEVEL_WARN, "No DS18B20 sensors found!");
+        sensorsIdentified = false;
+    }
+}
+
+// ======================================================
+// GŁÓWNE FUNKCJE CZUJNIKÓW – reszta bez dużych zmian
+// ======================================================
+
+void requestTemperature() {
+    unsigned long now = millis();
+    if (now - lastTempRequest >= TEMP_REQUEST_INTERVAL) {
+        sensors.setWaitForConversion(false);
+        if (sensors.requestTemperatures()) {
+            lastTempRequest = now;
+            lastTempReadPossible = now + TEMP_CONVERSION_TIME;
+        } else {
+            log_msg(LOG_LEVEL_WARN, "Temperature request failed");
+        }
+    }
+}
+
+static bool isValidTemperature(double t) {
+    return (t != DEVICE_DISCONNECTED_C &&
+            t != 85.0 &&
+            t != 127.0 &&
+            t >= -20.0 &&
+            t <= 200.0);
+}
+
+static double readTempWithTimeout(uint8_t sensorIndex) {
+    double temp = sensors.getTempCByIndex(sensorIndex);
+    if (temp == 85.0) {
+        delay(10);
+        temp = sensors.getTempCByIndex(sensorIndex);
+    }
+    return temp;
+}
+
+void readTemperature() {
+    unsigned long now = millis();
+    if (lastTempReadPossible == 0 || now < lastTempReadPossible) return;
+    lastTempReadPossible = 0;
+
+    if (!sensorsIdentified) {
+        identifyAndAssignSensors();
+        if (!sensorsIdentified) {
+            log_msg(LOG_LEVEL_WARN, "Sensors not identified, using defaults");
+            chamberSensor1Index = DEFAULT_CHAMBER_SENSOR_1;
+            chamberSensor2Index = DEFAULT_CHAMBER_SENSOR_2;
+        }
+    }
+
+    // Komora – DS18B20
+    double tChamber1 = readTempWithTimeout(chamberSensor1Index);
+    bool t1Valid = isValidTemperature(tChamber1);
+
+    double tChamber2 = -999.0;
+    bool t2Valid = false;
+    if (chamberSensor2Index >= 0) {
+        tChamber2 = readTempWithTimeout(chamberSensor2Index);
+        t2Valid = isValidTemperature(tChamber2);
+    }
+
+    double chamberAvg = 25.0;
+    if (t1Valid && t2Valid) {
+        chamberAvg = (tChamber1 + tChamber2) / 2.0;
+    } else if (t1Valid) {
+        chamberAvg = tChamber1;
+    } else if (t2Valid) {
+        chamberAvg = tChamber2;
+    }
+
+    // Obsługa błędów i cache komory
+    if (!t1Valid && !t2Valid) {
+        sensorErrorCount++;
+        if (sensorErrorCount >= SENSOR_ERROR_THRESHOLD) {
+            if (state_lock()) {
+                g_errorSensor = true;
+                if (g_currentState == ProcessState::RUNNING_AUTO ||
+                    g_currentState == ProcessState::RUNNING_MANUAL) {
+                    g_currentState = ProcessState::PAUSE_SENSOR;
+                    log_msg(LOG_LEVEL_ERROR, "Both chamber sensors error - pausing process");
+                }
+                state_unlock();
+            }
+        }
+        // fallback na cache
+        if (cachedChamber1.valid || cachedChamber2.valid) {
+            if (state_lock()) {
+                if (cachedChamber1.valid && cachedChamber2.valid) {
+                    g_tChamber = (cachedChamber1.value + cachedChamber2.value) / 2.0;
+                } else if (cachedChamber1.valid) {
+                    g_tChamber = cachedChamber1.value;
+                } else {
+                    g_tChamber = cachedChamber2.value;
+                }
+                state_unlock();
+            }
+        }
+    } else {
+        sensorErrorCount = 0;
+
+        if (t1Valid) {
+            cachedChamber1.value = tChamber1;
+            cachedChamber1.timestamp = now;
+            cachedChamber1.valid = true;
+            cachedChamber1.readAttempts = 0;
+        }
+        if (t2Valid) {
+            cachedChamber2.value = tChamber2;
+            cachedChamber2.timestamp = now;
+            cachedChamber2.valid = true;
+            cachedChamber2.readAttempts = 0;
+        }
+
+        if (state_lock()) {
+            g_tChamber = chamberAvg;
+            g_tChamber1 = t1Valid ? tChamber1 : cachedChamber1.value;
+            g_tChamber2 = t2Valid ? tChamber2 : cachedChamber2.value;
+
+            if (g_errorSensor && g_currentState == ProcessState::PAUSE_SENSOR) {
+                g_errorSensor = false;
+                log_msg(LOG_LEVEL_INFO, "Chamber sensor recovered");
+            }
+            state_unlock();
+        }
+    }
+
+    // Mięso – NTC
+    double tMeatNtc = readNtcTemperature();
+    bool meatValid = (tMeatNtc > NTC_TEMP_MIN && tMeatNtc < NTC_TEMP_MAX);
+
+    if (meatValid) {
+        cachedMeatNtc.value = tMeatNtc;
+        cachedMeatNtc.timestamp = now;
+        cachedMeatNtc.valid = true;
+        cachedMeatNtc.readAttempts = 0;
+
+        if (state_lock()) {
+            g_tMeat = tMeatNtc;
+            state_unlock();
+        }
+    } else if (cachedMeatNtc.valid) {
+        if (state_lock()) {
+            g_tMeat = cachedMeatNtc.value;
+            state_unlock();
+        }
+        LOG_FMT(LOG_LEVEL_WARN, "NTC invalid reading (%.1f), using cached: %.1f",
+                tMeatNtc, cachedMeatNtc.value);
+    }
+
+    // Przegrzanie komory
+    if (state_lock()) {
+        if (g_tChamber > CFG_T_MAX_SOFT) {
+            g_errorOverheat = true;
+            g_currentState = ProcessState::PAUSE_OVERHEAT;
+            LOG_FMT(LOG_LEVEL_ERROR, "OVERHEAT detected: %.1f C (avg chamber)", g_tChamber);
+        }
+        state_unlock();
+    }
+}
+
+// ────────────────────────────────────────────────
+// Pozostałe funkcje bez zmian
+// ────────────────────────────────────────────────
+
+void checkDoor() {
+    bool nowOpen = (digitalRead(PIN_DOOR) == HIGH);
+    bool shouldTurnOff = false;
+    bool shouldBeep = false;
+    bool shouldResume = false;
+
+    if (state_lock()) {
+        bool wasOpen = g_doorOpen;
+        if (nowOpen && !wasOpen) {
+            g_doorOpen = true;
+            if (g_currentState == ProcessState::RUNNING_AUTO ||
+                g_currentState == ProcessState::RUNNING_MANUAL) {
+                g_currentState = ProcessState::PAUSE_DOOR;
+                g_processStats.pauseCount++;
+                shouldTurnOff = true;
+                shouldBeep = true;
+                log_msg(LOG_LEVEL_INFO, "Door opened - pausing");
+            }
+        } else if (!nowOpen && wasOpen) {
+            g_doorOpen = false;
+            if (g_currentState == ProcessState::PAUSE_DOOR) {
+                g_currentState = ProcessState::SOFT_RESUME;
+                shouldResume = true;
+                log_msg(LOG_LEVEL_INFO, "Door closed - resuming");
+            }
+        }
+        state_unlock();
+    }
+
+    if (shouldTurnOff) { allOutputsOff(); }
+    if (shouldBeep)    { buzzerBeep(2, 100, 100); }
+    if (shouldResume)  { initHeaterEnable(); }
+}
+
+unsigned long getSensorCacheAge() {
+    unsigned long now = millis();
+    return cachedChamber1.valid ? (now - cachedChamber1.timestamp) : 0xFFFFFFFF;
+}
+
+void forceSensorRead() {
+    lastTempRequest = 0;
+    lastTempReadPossible = 0;
+}
+
+String getSensorDiagnostics() {
+    char buffer[384];
+    snprintf(buffer, sizeof(buffer),
+        "Chamber1: %.1f C (sensor: %d, valid: %d)\n"
+        "Chamber2: %.1f C (sensor: %d, valid: %d)\n"
+        "Chamber Avg: %.1f C\n"
+        "Meat (NTC): %.1f C (GPIO%d, valid: %d)\n"
+        "Error count: %d, Identified: %s",
+        cachedChamber1.value, chamberSensor1Index, cachedChamber1.valid,
+        cachedChamber2.value, chamberSensor2Index, cachedChamber2.valid,
+        (cachedChamber1.value + cachedChamber2.value) / 2.0,
+        cachedMeatNtc.value, PIN_NTC, cachedMeatNtc.valid,
+        sensorErrorCount,
+        sensorsIdentified ? "YES" : "NO");
+    return String(buffer);
+}
+
+String getSensorAssignmentInfo() {
+    char buffer[192];
+    snprintf(buffer, sizeof(buffer),
+        "Sensor Assignments:\n"
+        "  Chamber1: DS18B20 idx %d\n"
+        "  Chamber2: DS18B20 idx %d\n"
+        "  Meat: NTC 100k on GPIO%d\n"
+        "  Total DS18B20: %d\n"
+        "  Identified: %s",
+        chamberSensor1Index, chamberSensor2Index,
+        PIN_NTC, sensors.getDeviceCount(),
+        sensorsIdentified ? "YES" : "NO");
+    return String(buffer);
+}
+
+bool autoDetectAndAssignSensors() {
+    int deviceCount = sensors.getDeviceCount();
+    if (deviceCount < 1) {
+        log_msg(LOG_LEVEL_ERROR, "Need at least 1 DS18B20 sensor");
+        return false;
+    }
+
+    sensorsIdentified = false;
+    identifyAndAssignSensors();
+    return sensorsIdentified;
+}
+
+int getChamberSensor1Index() { return chamberSensor1Index; }
+int getChamberSensor2Index() { return chamberSensor2Index; }
+int getTotalSensorCount()    { return sensors.getDeviceCount(); }
+bool areSensorsIdentified()  { return sensorsIdentified; }
+
+
+// ======================================================
+// KALIBRACJA NTC - wielopunktowa LUT z flash
+// Plik: /profiles/ntc_cal.dat
+// Format CSV: temp;adc (jedna linia = jeden punkt)
+// Przykład: 20.0;2845
+// ======================================================
+
+#define CAL_FILE       "/profiles/ntc_cal.dat"
+#define CAL_MAX_POINTS 20
+
+struct CalPoint {
+    double temp;
+    double adc;
+};
+
+static CalPoint calLUT[CAL_MAX_POINTS];
+static int      calCount   = 0;
+static bool     calActive  = false;
+
+// Zaladuj kalibracje z flash - wywolaj przy starcie i po zapisie
+void calibration_load() {
+    calCount  = 0;
+    calActive = false;
+
+    if (!flash_is_ready() || !flash_file_exists(CAL_FILE)) {
+        log_msg(LOG_LEVEL_INFO, "NTC: brak pliku kalibracji, uzywana domyslna LUT");
+        return;
+    }
+
+    String content = flash_file_read_string(CAL_FILE);
+    if (content.length() == 0) return;
+
+    int pos = 0;
+    int len = content.length();
+    while (pos < len && calCount < CAL_MAX_POINTS) {
+        int eol = content.indexOf('\n', pos);
+        if (eol < 0) eol = len;
+
+        String line = content.substring(pos, eol);
+        line.trim();
+        pos = eol + 1;
+
+        if (line.length() == 0 || line[0] == '#') continue;
+
+        int sep = line.indexOf(';');
+        if (sep < 0) continue;
+
+        double temp = line.substring(0, sep).toFloat();
+        double adc  = line.substring(sep + 1).toFloat();
+
+        if (adc > 0 && temp > -50 && temp < 200) {
+            calLUT[calCount].temp = temp;
+            calLUT[calCount].adc  = adc;
+            calCount++;
+        }
+    }
+
+    if (calCount >= 2) {
+        // Posortuj malejaco po ADC (rosna temperatura)
+        for (int i = 0; i < calCount - 1; i++) {
+            for (int j = 0; j < calCount - i - 1; j++) {
+                if (calLUT[j].adc < calLUT[j+1].adc) {
+                    CalPoint tmp = calLUT[j];
+                    calLUT[j]    = calLUT[j+1];
+                    calLUT[j+1]  = tmp;
+                }
+            }
+        }
+        calActive = true;
+        LOG_FMT(LOG_LEVEL_INFO, "NTC: kalibracja zaladowana (%d punktow)", calCount);
+    } else {
+        calCount  = 0;
+        calActive = false;
+        log_msg(LOG_LEVEL_WARN, "NTC: za malo punktow kalibracji (min 2)");
+    }
+}
+
+bool calibration_is_active() { return calActive; }
+
+// Interpolacja z kalibrowanej LUT
+static double getTempFromCalibration(double adc) {
+    if (!calActive || calCount < 2) return getTempFromLUT(adc);
+
+    // Zakres
+    if (adc >= calLUT[0].adc)               return calLUT[0].temp;
+    if (adc <= calLUT[calCount-1].adc)       return calLUT[calCount-1].temp;
+
+    // Interpolacja liniowa
+    for (int i = 0; i < calCount - 1; i++) {
+        if (adc <= calLUT[i].adc && adc > calLUT[i+1].adc) {
+            double adcRange  = calLUT[i].adc  - calLUT[i+1].adc;
+            double tempRange = calLUT[i+1].temp - calLUT[i].temp;
+            double adcOffset = calLUT[i].adc  - adc;
+            return calLUT[i].temp + (adcOffset * tempRange / adcRange);
+        }
+    }
+    return getTempFromLUT(adc);
+}
+
+// Zapisz kalibracje z JSON body {points:[{temp,adc},...]}
+bool calibration_save_from_json(const String& json) {
+    // Prosty parser - szukaj par temp i adc
+    String content = "# NTC kalibracja - format: temp;adc\n";
+    int pos = 0;
+    int savedCount = 0;
+
+    while (savedCount < CAL_MAX_POINTS) {
+        int tPos = json.indexOf("\"temp\":", pos);
+        if (tPos < 0) break;
+        tPos += 7;
+        int tEnd = json.indexOf(',', tPos);
+        if (tEnd < 0) tEnd = json.indexOf('}', tPos);
+        if (tEnd < 0) break;
+
+        int aPos = json.indexOf("\"adc\":", pos);
+        if (aPos < 0) break;
+        aPos += 6;
+        int aEnd = json.indexOf(',', aPos);
+        if (aEnd < 0) aEnd = json.indexOf('}', aPos);
+        if (aEnd < 0) break;
+
+        double temp = json.substring(tPos, tEnd).toFloat();
+        double adc  = json.substring(aPos, aEnd).toFloat();
+
+        if (adc > 0 && temp > -50 && temp < 200) {
+            char line[32];
+            snprintf(line, sizeof(line), "%.1f;%.0f\n", temp, adc);
+            content += line;
+            savedCount++;
+        }
+
+        pos = max(tEnd, aEnd) + 1;
+    }
+
+    if (savedCount < 2) {
+        log_msg(LOG_LEVEL_ERROR, "calibration_save: za malo punktow");
+        return false;
+    }
+
+    bool ok = flash_file_write_string(CAL_FILE, content);
+    LOG_FMT(LOG_LEVEL_INFO, "NTC cal saved: %d points, ok=%d", savedCount, ok);
+    return ok;
+}
+
+// Zwroc aktualna kalibracje jako JSON
+String calibration_load_as_json() {
+    if (!calActive || calCount == 0) {
+        // Sprobuj wczytac z pliku
+        calibration_load();
+    }
+    if (!calActive || calCount == 0) {
+        return "{\"ok\":false,\"points\":[]}";
+    }
+    String json = "{\"ok\":true,\"points\":[";
+    for (int i = 0; i < calCount; i++) {
+        if (i > 0) json += ",";
+        char buf[48];
+        snprintf(buf, sizeof(buf), "{\"temp\":%.1f,\"adc\":%.0f}",
+                 calLUT[i].temp, calLUT[i].adc);
+        json += buf;
+    }
+    json += "]}";
+    return json;
+}
+
+// Usun plik kalibracji
+void calibration_clear() {
+    if (flash_is_ready() && flash_file_exists(CAL_FILE)) {
+        flash_file_delete(CAL_FILE);
+    }
+    calCount  = 0;
+    calActive = false;
+    log_msg(LOG_LEVEL_INFO, "NTC: kalibracja usunieta, uzywana domyslna LUT");
+}
